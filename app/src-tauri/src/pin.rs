@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::{Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{State, WebviewUrl, WebviewWindowBuilder};
 
 pub struct PinStore(pub Mutex<HashMap<String, String>>);
 

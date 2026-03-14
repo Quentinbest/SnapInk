@@ -29,9 +29,5 @@
       "infoPlist": "./Info.plist"
     }
   },
-  "plugins": {
-    "global-shortcut": {},
-    "clipboard-manager": {},
-    "dialog": {}
-  }
+  "plugins": {}
 }
