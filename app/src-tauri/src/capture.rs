@@ -86,6 +86,14 @@ pub fn capture_region(region: CaptureRegion, monitor_index: usize) -> Result<Str
     image_to_base64_png(&cropped)
 }
 
+pub fn take_screenshot_sync() -> Result<String, String> {
+    let monitors = Monitor::all().map_err(|e| e.to_string())?;
+    let monitor = monitors.first().ok_or("No monitor found")?;
+    let img = monitor.capture_image().map_err(|e| e.to_string())?;
+    let dyn_img = DynamicImage::ImageRgba8(img);
+    image_to_base64_png(&dyn_img)
+}
+
 #[tauri::command]
 pub fn capture_window_by_id(window_id: u32) -> Result<String, String> {
     let windows = Window::all().map_err(|e| e.to_string())?;

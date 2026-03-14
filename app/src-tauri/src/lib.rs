@@ -1,10 +1,12 @@
 mod capture;
+mod capture_store;
 mod clipboard;
 mod export;
 mod pin;
 mod settings;
 mod types;
 
+use capture_store::CaptureStore;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -41,9 +43,38 @@ fn open_settings_window(app: &tauri::AppHandle) {
 }
 
 fn open_capture_window(app: &tauri::AppHandle, mode: &str) {
+    // Take the background screenshot BEFORE the capture window opens so the
+    // overlay never appears in the frozen background image.
+    if mode == "area" || mode == "window" || mode == "screen" {
+        if let Ok(store) = app.try_state::<CaptureStore>().ok_or("") {
+            match capture::take_screenshot_sync() {
+                Ok(data) => {
+                    *store.background.lock().unwrap() = Some(data);
+                    *store.result.lock().unwrap() = None;
+                }
+                Err(e) => eprintln!("pre-capture screenshot failed: {}", e),
+            }
+        }
+    }
+
+    // For full-screen mode, the result is already stored; open editor directly.
+    if mode == "screen" {
+        let result = app
+            .try_state::<CaptureStore>()
+            .and_then(|s| s.background.lock().unwrap().clone());
+        if let Some(data) = result {
+            if let Some(store) = app.try_state::<CaptureStore>() {
+                *store.result.lock().unwrap() = Some(data);
+            }
+            open_editor_window(app);
+            return;
+        }
+    }
+
     if let Some(win) = app.get_webview_window("capture") {
         let _ = win.close();
     }
+
     let url = format!("/capture?mode={}", mode);
     if let Some(monitor) = app.primary_monitor().ok().flatten() {
         let size = monitor.size();
@@ -78,7 +109,10 @@ fn open_settings_cmd(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(pin::PinStore(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .manage(pin::PinStore(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )))
+        .manage(CaptureStore::new())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -129,26 +163,27 @@ pub fn run() {
                 .icon(icon)
                 .menu(&menu)
                 .show_menu_on_left_click(true)
-                .on_menu_event(move |app, event| {
-                    match event.id().as_ref() {
-                        "capture_area" => open_capture_window(app, "area"),
-                        "capture_screen" => open_capture_window(app, "screen"),
-                        "capture_window" => open_capture_window(app, "window"),
-                        "capture_scrolling" => open_capture_window(app, "scrolling"),
-                        "ocr" => open_capture_window(app, "ocr"),
-                        "repeat_last" => open_capture_window(app, "repeat"),
-                        "settings" => open_settings_window(app),
-                        "quit" => app.exit(0),
-                        _ => {}
-                    }
+                .on_menu_event(move |app, event| match event.id().as_ref() {
+                    "capture_area" => open_capture_window(app, "area"),
+                    "capture_screen" => open_capture_window(app, "screen"),
+                    "capture_window" => open_capture_window(app, "window"),
+                    "capture_scrolling" => open_capture_window(app, "scrolling"),
+                    "ocr" => open_capture_window(app, "ocr"),
+                    "repeat_last" => open_capture_window(app, "repeat"),
+                    "settings" => open_settings_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
                 })
                 .on_tray_icon_event(move |_tray, event| {
-                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                    }
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {}
                 })
                 .build(app)?;
 
-            // Register global shortcuts
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
             let h1 = handle.clone();
@@ -194,6 +229,10 @@ pub fn run() {
             capture::capture_fullscreen,
             capture::capture_region,
             capture::capture_window_by_id,
+            capture_store::get_capture_background,
+            capture_store::crop_and_store,
+            capture_store::consume_capture_result,
+            capture_store::store_capture_result,
             export::export_to_file,
             export::expand_filename,
             export::get_default_save_path,

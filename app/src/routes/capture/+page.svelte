@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { emit } from '@tauri-apps/api/event';
   import type { CaptureMode, OverlayState, MonitorInfo, WindowInfo, Point } from '$lib/types';
 
   type SelectionRect = { x: number; y: number; width: number; height: number };
@@ -29,33 +28,16 @@
     mode = getUrlMode();
     try {
       monitors = await invoke<MonitorInfo[]>('get_monitors');
-      if (mode === 'screen') {
-        await captureAndClose();
-        return;
-      }
       if (mode === 'window') {
         windows = await invoke<WindowInfo[]>('get_windows');
       }
-      // Take a background screenshot to freeze content
-      if (monitors.length > 0) {
-        screenshotData = await invoke<string>('capture_fullscreen', { monitorIndex: 0 });
-      }
+      // Use the pre-taken background screenshot (captured before this window opened)
+      screenshotData = await invoke<string | null>('get_capture_background');
     } catch (e) {
       console.error(e);
     }
   });
 
-  async function captureAndClose() {
-    try {
-      const data = await invoke<string>('capture_fullscreen', { monitorIndex: 0 });
-      // Emit captured event and open editor
-      await emit('capture-complete', { imageData: data, mode });
-      await invoke('open_editor_cmd');
-    } catch (e) {
-      console.error(e);
-    }
-    await appWindow.close();
-  }
 
   function onMouseMove(e: MouseEvent) {
     cursor = { x: e.clientX, y: e.clientY };
@@ -112,7 +94,8 @@
   async function captureWindow(windowId: number) {
     try {
       const data = await invoke<string>('capture_window_by_id', { windowId });
-      await appWindow.emit('capture-complete', { imageData: data, mode: 'window' });
+      await invoke('store_capture_result', { data });
+      await invoke('open_editor_cmd');
     } catch (e) {
       console.error(e);
     }
@@ -122,15 +105,14 @@
   async function doCapture() {
     if (!selection || !monitors[0]) return;
     const scale = monitors[0].scaleFactor;
-    const region = {
-      x: Math.round(selection.x * scale + monitors[0].x),
-      y: Math.round(selection.y * scale + monitors[0].y),
-      width: Math.round(selection.width * scale),
-      height: Math.round(selection.height * scale),
-    };
     try {
-      const data = await invoke<string>('capture_region', { region, monitorIndex: 0 });
-      await appWindow.emit('capture-complete', { imageData: data, mode: 'area' });
+      await invoke('crop_and_store', {
+        x: Math.round(selection.x * scale),
+        y: Math.round(selection.y * scale),
+        width: Math.round(selection.width * scale),
+        height: Math.round(selection.height * scale),
+      });
+      await invoke('open_editor_cmd');
     } catch (e) {
       console.error(e);
     }

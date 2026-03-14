@@ -71,6 +71,18 @@
   });
 
   onMount(async () => {
+    // Consume any pending capture result stored by the Rust backend
+    try {
+      const pending = await invoke<string | null>('consume_capture_result');
+      if (pending) {
+        appStore.setCaptureImageData(pending);
+        setFilenameFromNow();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    // Keep event listener for future compatibility
     unlisten = await listen<{ imageData: string; mode: string }>('capture-complete', (event) => {
       appStore.setCaptureImageData(event.payload.imageData);
       setFilenameFromNow();
