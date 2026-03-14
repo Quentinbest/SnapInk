@@ -105,7 +105,7 @@
             <span>{ACTION_LABELS[hotkey.action] ?? hotkey.action}</span>
             <div class="kbd-row">
               {#each hotkey.shortcut.split('+') as part}
-                <kbd>{part.replace('CommandOrControl', '⌘').replace('Shift', '⇧').replace('Control', '⌃').replace('Alt', '⌥')}</kbd>
+                <kbd>{part.replace('CommandOrControl', '⌘').replace('Ctrl', '⌃').replace('Shift', '⇧').replace('Control', '⌃').replace('Alt', '⌥')}</kbd>
               {/each}
             </div>
           </div>

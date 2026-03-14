@@ -86,14 +86,14 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
-            let capture_area = MenuItem::with_id(app, "capture_area", "Capture Area", true, Some("CmdOrCtrl+Shift+4"))?;
-            let capture_screen = MenuItem::with_id(app, "capture_screen", "Capture Screen", true, Some("CmdOrCtrl+Shift+3"))?;
-            let capture_window = MenuItem::with_id(app, "capture_window", "Capture Window", true, Some("CmdOrCtrl+Shift+5"))?;
-            let capture_scrolling = MenuItem::with_id(app, "capture_scrolling", "Scrolling Capture", true, Some("CmdOrCtrl+Shift+6"))?;
+            let capture_area = MenuItem::with_id(app, "capture_area", "Capture Area", true, Some("Ctrl+Shift+4"))?;
+            let capture_screen = MenuItem::with_id(app, "capture_screen", "Capture Screen", true, Some("Ctrl+Shift+3"))?;
+            let capture_window = MenuItem::with_id(app, "capture_window", "Capture Window", true, Some("Ctrl+Shift+5"))?;
+            let capture_scrolling = MenuItem::with_id(app, "capture_scrolling", "Scrolling Capture", true, Some("Ctrl+Shift+6"))?;
             let sep1 = PredefinedMenuItem::separator(app)?;
-            let ocr = MenuItem::with_id(app, "ocr", "Recognize Text (OCR)", true, Some("CmdOrCtrl+Shift+7"))?;
+            let ocr = MenuItem::with_id(app, "ocr", "Recognize Text (OCR)", true, Some("Ctrl+Shift+7"))?;
             let sep2 = PredefinedMenuItem::separator(app)?;
-            let repeat_last = MenuItem::with_id(app, "repeat_last", "Repeat Last Capture", true, Some("CmdOrCtrl+Shift+R"))?;
+            let repeat_last = MenuItem::with_id(app, "repeat_last", "Repeat Last Capture", true, Some("Ctrl+Shift+R"))?;
             let sep3 = PredefinedMenuItem::separator(app)?;
             let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
             let sep4 = PredefinedMenuItem::separator(app)?;
@@ -152,35 +152,35 @@ pub fn run() {
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
             let h1 = handle.clone();
-            app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+4", move |_app, _shortcut, event| {
+            app.global_shortcut().on_shortcut("Ctrl+Shift+4", move |_app, _shortcut, event| {
                 if event.state() == ShortcutState::Pressed {
                     open_capture_window(&h1, "area");
                 }
             })?;
 
             let h2 = handle.clone();
-            app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+3", move |_app, _shortcut, event| {
+            app.global_shortcut().on_shortcut("Ctrl+Shift+3", move |_app, _shortcut, event| {
                 if event.state() == ShortcutState::Pressed {
                     open_capture_window(&h2, "screen");
                 }
             })?;
 
             let h3 = handle.clone();
-            app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+5", move |_app, _shortcut, event| {
+            app.global_shortcut().on_shortcut("Ctrl+Shift+5", move |_app, _shortcut, event| {
                 if event.state() == ShortcutState::Pressed {
                     open_capture_window(&h3, "window");
                 }
             })?;
 
             let h4 = handle.clone();
-            app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+6", move |_app, _shortcut, event| {
+            app.global_shortcut().on_shortcut("Ctrl+Shift+6", move |_app, _shortcut, event| {
                 if event.state() == ShortcutState::Pressed {
                     open_capture_window(&h4, "scrolling");
                 }
             })?;
 
             let h5 = handle.clone();
-            app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+7", move |_app, _shortcut, event| {
+            app.global_shortcut().on_shortcut("Ctrl+Shift+7", move |_app, _shortcut, event| {
                 if event.state() == ShortcutState::Pressed {
                     open_capture_window(&h5, "ocr");
                 }

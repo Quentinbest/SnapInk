@@ -111,12 +111,12 @@ impl Default for Settings {
                 retina_clipboard: true,
             },
             hotkeys: vec![
-                HotkeyBinding { action: "capture_area".to_string(), shortcut: "CommandOrControl+Shift+4".to_string() },
-                HotkeyBinding { action: "capture_screen".to_string(), shortcut: "CommandOrControl+Shift+3".to_string() },
-                HotkeyBinding { action: "capture_window".to_string(), shortcut: "CommandOrControl+Shift+5".to_string() },
-                HotkeyBinding { action: "capture_scrolling".to_string(), shortcut: "CommandOrControl+Shift+6".to_string() },
-                HotkeyBinding { action: "capture_ocr".to_string(), shortcut: "CommandOrControl+Shift+7".to_string() },
-                HotkeyBinding { action: "repeat_last".to_string(), shortcut: "CommandOrControl+Shift+R".to_string() },
+                HotkeyBinding { action: "capture_area".to_string(), shortcut: "Ctrl+Shift+4".to_string() },
+                HotkeyBinding { action: "capture_screen".to_string(), shortcut: "Ctrl+Shift+3".to_string() },
+                HotkeyBinding { action: "capture_window".to_string(), shortcut: "Ctrl+Shift+5".to_string() },
+                HotkeyBinding { action: "capture_scrolling".to_string(), shortcut: "Ctrl+Shift+6".to_string() },
+                HotkeyBinding { action: "capture_ocr".to_string(), shortcut: "Ctrl+Shift+7".to_string() },
+                HotkeyBinding { action: "repeat_last".to_string(), shortcut: "Ctrl+Shift+R".to_string() },
             ],
             annotations: AnnotationSettings {
                 default_color: "#FF3B30".to_string(),
