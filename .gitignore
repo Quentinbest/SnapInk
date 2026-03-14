@@ -1,0 +1,21 @@
+# Rust build artifacts
+app/src-tauri/target/
+
+# Node
+app/node_modules/
+app/build/
+app/.svelte-kit/
+
+# macOS
+.DS_Store
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Figma mockups (large HTML files)
+figma-mockups/
+
+# ReferenceUI
+ReferenceUI/
