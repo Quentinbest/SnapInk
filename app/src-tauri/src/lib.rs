@@ -122,8 +122,11 @@ pub fn run() {
                 &quit,
             ])?;
 
+            let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
+                .expect("failed to load tray icon");
+
             let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(icon)
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(move |app, event| {
