@@ -299,25 +299,48 @@
       const ann = appStore.annotations.find((a) => a.id === id);
       if (!ann) return;
 
+      const sx = node.scaleX();
+      const sy = node.scaleY();
+
       if (ann.type === 'rect' || ann.type === 'blur') {
         appStore.updateAnnotation(id, {
           x: node.x(),
           y: node.y(),
-          width: Math.max(1, node.width() * node.scaleX()),
-          height: Math.max(1, node.height() * node.scaleY()),
+          width: Math.max(1, node.width() * sx),
+          height: Math.max(1, node.height() * sy),
         });
       } else if (ann.type === 'ellipse') {
         const el = node as any;
         appStore.updateAnnotation(id, {
           x: node.x(),
           y: node.y(),
-          radiusX: Math.max(1, el.radiusX() * node.scaleX()),
-          radiusY: Math.max(1, el.radiusY() * node.scaleY()),
+          radiusX: Math.max(1, el.radiusX() * sx),
+          radiusY: Math.max(1, el.radiusY() * sy),
         });
+      } else if (ann.type === 'line' || ann.type === 'arrow') {
+        // Points are relative to node origin (0,0). After transform,
+        // apply scale + offset to get new absolute coordinates.
+        const pts = (node as any).points() as number[];
+        appStore.updateAnnotation(id, {
+          x1: node.x() + pts[0] * sx,
+          y1: node.y() + pts[1] * sy,
+          x2: node.x() + pts[2] * sx,
+          y2: node.y() + pts[3] * sy,
+        });
+      } else if (ann.type === 'pen') {
+        const pts = (node as any).points() as number[];
+        const newPoints: number[] = [];
+        for (let i = 0; i < pts.length; i += 2) {
+          newPoints.push(node.x() + pts[i] * sx);
+          newPoints.push(node.y() + pts[i + 1] * sy);
+        }
+        appStore.updateAnnotation(id, { points: newPoints });
       } else if (ann.type === 'text') {
+        const scale = Math.max(sx, sy);
         appStore.updateAnnotation(id, {
           x: node.x(),
           y: node.y(),
+          fontSize: Math.round((ann as any).fontSize * scale),
         });
       }
       // Reset scale so the re-render from the $effect doesn't double-apply it.

@@ -72,9 +72,9 @@ export class AnnotationEngine {
       const node = this.annotationLayer.findOne(`#${selectedId}`);
       if (node) {
         this.transformer.nodes([node]);
-        // Only enable resize anchors for shapes with natural dimensions.
+        // Disable resize anchors only for step (fixed-size numbered circle).
         const ann = annotations.find((a) => a.id === selectedId);
-        if (ann && (ann.type === 'line' || ann.type === 'arrow' || ann.type === 'pen' || ann.type === 'step')) {
+        if (ann && ann.type === 'step') {
           this.transformer.enabledAnchors([]);
         } else {
           this.transformer.enabledAnchors([
