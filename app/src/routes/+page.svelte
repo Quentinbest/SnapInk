@@ -143,20 +143,69 @@
 
   function pad(n: number) { return String(n).padStart(2, '0'); }
 
+  // Returns the cursor CSS value for the current tool.
+  function cursorForTool(tool: ToolType): string {
+    switch (tool) {
+      case 'select': return 'default';
+      case 'text': return 'text';
+      case 'pen': return 'crosshair';
+      default: return 'crosshair';
+    }
+  }
+
   function setupStageEvents() {
     if (!engine) return;
     const stage = engine.stage;
+    const container = stage.container();
+    container.style.cursor = cursorForTool(appStore.activeTool);
 
     stage.on('mousedown', (e) => {
       const tool = appStore.activeTool;
+
+      // ── Select mode ───────────────────────────────────────────────
       if (tool === 'select') {
-        // Deselect when clicking the stage OR the base image (which covers
-        // the entire stage).  The old `e.target === stage` check never
-        // matched because clicks always land on the base Konva.Image node.
         const isBackground = e.target === stage || e.target?.getLayer() === engine?.baseLayer;
-        if (isBackground) appStore.selectAnnotation(null);
+        if (isBackground) {
+          appStore.selectAnnotation(null);
+        } else if (e.target && e.target !== stage) {
+          appStore.selectAnnotation(e.target.id() || null);
+        }
         return;
       }
+
+      // ── Text tool — inline editing, no drag ───────────────────────
+      if (tool === 'text') {
+        const pos = stage.getPointerPosition();
+        if (!pos || !engine) return;
+        engine.openTextInput(pos.x, pos.y, appStore.activeColor).then((text) => {
+          if (text) {
+            addAnnotation({
+              type: 'text',
+              x: pos.x,
+              y: pos.y,
+              text,
+              fontSize: 14,
+              bold: false,
+              background: true,
+            });
+          }
+          appStore.setActiveTool('select');
+          container.style.cursor = cursorForTool('select');
+        });
+        return;
+      }
+
+      // ── Step tool — place on click, no drag ───────────────────────
+      if (tool === 'step') {
+        const pos = stage.getPointerPosition();
+        if (!pos) return;
+        addAnnotation({ type: 'step', x: pos.x, y: pos.y, number: appStore.nextStepNumber() });
+        appStore.setActiveTool('select');
+        container.style.cursor = cursorForTool('select');
+        return;
+      }
+
+      // ── Drawing tools (rect, ellipse, line, arrow, pen, blur) ─────
       const pos = stage.getPointerPosition();
       if (!pos) return;
       isDrawing = true;
@@ -166,44 +215,92 @@
 
     stage.on('mousemove', (e) => {
       lastMouseEvent = e.evt;
-      if (!isDrawing || !drawStart) return;
-      const pos = engine!.stage.getPointerPosition();
+      if (!isDrawing || !drawStart || !engine) return;
+      const pos = stage.getPointerPosition();
       if (!pos) return;
-      if (appStore.activeTool === 'pen') {
+
+      const tool = appStore.activeTool;
+      const color = appStore.activeColor;
+      const sw = appStore.strokeWidth;
+
+      if (tool === 'pen') {
         penPoints = [...penPoints, pos.x, pos.y];
+        // Live pen preview
+        const previewNode = engine.createNode({
+          id: '__preview', type: 'pen', color, strokeWidth: sw, points: penPoints,
+        } as Annotation);
+        if (previewNode) engine.showPreview(previewNode);
+        return;
+      }
+
+      // For geometry tools, build a preview annotation.
+      const dx = pos.x - drawStart.x;
+      const dy = pos.y - drawStart.y;
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+
+      let previewAnn: Annotation | null = null;
+
+      if (tool === 'rect') {
+        previewAnn = {
+          id: '__preview', type: 'rect', color, strokeWidth: sw,
+          x: Math.min(drawStart.x, pos.x), y: Math.min(drawStart.y, pos.y),
+          width: Math.abs(dx), height: Math.abs(dy), cornerRadius: 0, fill: false,
+        } as Annotation;
+      } else if (tool === 'ellipse') {
+        previewAnn = {
+          id: '__preview', type: 'ellipse', color, strokeWidth: sw,
+          x: (drawStart.x + pos.x) / 2, y: (drawStart.y + pos.y) / 2,
+          radiusX: Math.abs(dx) / 2, radiusY: Math.abs(dy) / 2,
+        } as Annotation;
+      } else if (tool === 'line') {
+        previewAnn = {
+          id: '__preview', type: 'line', color, strokeWidth: sw,
+          x1: drawStart.x, y1: drawStart.y, x2: pos.x, y2: pos.y,
+        } as Annotation;
+      } else if (tool === 'arrow') {
+        let ex = pos.x, ey = pos.y;
+        if (lastMouseEvent?.shiftKey) {
+          const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+          const len = Math.sqrt(dx * dx + dy * dy);
+          ex = drawStart.x + Math.cos(angle) * len;
+          ey = drawStart.y + Math.sin(angle) * len;
+        }
+        previewAnn = {
+          id: '__preview', type: 'arrow', color, strokeWidth: sw,
+          x1: drawStart.x, y1: drawStart.y, x2: ex, y2: ey, filledHead: true,
+        } as Annotation;
+      } else if (tool === 'blur') {
+        previewAnn = {
+          id: '__preview', type: 'blur', color, strokeWidth: sw,
+          x: Math.min(drawStart.x, pos.x), y: Math.min(drawStart.y, pos.y),
+          width: Math.abs(dx), height: Math.abs(dy), strength: 10, mode: 'blur' as const,
+        } as Annotation;
+      }
+
+      if (previewAnn) {
+        const node = engine.createNode(previewAnn);
+        if (node) {
+          node.listening(false);
+          engine.showPreview(node);
+        }
       }
     });
 
     stage.on('mouseup', () => {
-      if (!isDrawing || !drawStart) return;
-      const pos = engine!.stage.getPointerPosition();
+      if (!isDrawing || !drawStart || !engine) return;
+      const pos = stage.getPointerPosition();
       if (!pos) return;
+
+      engine.clearPreview();
       finalizeDrawing(pos);
+
       isDrawing = false;
       drawStart = null;
       penPoints = [];
-    });
 
-    stage.on('click', (e) => {
-      if (appStore.activeTool === 'select' && e.target !== stage) {
-        appStore.selectAnnotation(e.target.id() || null);
-      }
-      if (appStore.activeTool === 'text') {
-        const stagePos = stage.getPointerPosition();
-        if (!stagePos) return;
-        const text = window.prompt('Enter text:');
-        if (text) {
-          addAnnotation({
-            type: 'text',
-            x: stagePos.x,
-            y: stagePos.y,
-            text,
-            fontSize: 14,
-            bold: false,
-            background: true,
-          });
-        }
-      }
+      // Auto-return to select after drawing (Shottr behavior).
+      appStore.setActiveTool('select');
+      container.style.cursor = cursorForTool('select');
     });
   }
 
@@ -234,7 +331,6 @@
     } else if (tool === 'line' && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
       addAnnotation({ type: 'line', x1: start.x, y1: start.y, x2: end.x, y2: end.y });
     } else if (tool === 'arrow' && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
-      // Angle snap to 45° increments when Shift is held
       let ex = end.x, ey = end.y;
       if (lastMouseEvent?.shiftKey) {
         const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
@@ -255,8 +351,6 @@
         strength: 10,
         mode: 'blur',
       });
-    } else if (tool === 'step') {
-      addAnnotation({ type: 'step', x: end.x, y: end.y, number: appStore.nextStepNumber() });
     }
   }
 
@@ -285,7 +379,11 @@
     }
 
     const toolMap: Record<string, ToolType> = { r: 'rect', o: 'ellipse', l: 'line', a: 'arrow', p: 'pen', b: 'blur', t: 'text', n: 'step', v: 'select' };
-    if (toolMap[e.key.toLowerCase()]) appStore.setActiveTool(toolMap[e.key.toLowerCase()]);
+    const mapped = toolMap[e.key.toLowerCase()];
+    if (mapped) {
+      appStore.setActiveTool(mapped);
+      if (engine) engine.stage.container().style.cursor = cursorForTool(mapped);
+    }
   }
 
   async function copyToClipboard() {
@@ -388,7 +486,7 @@
             class="tool-btn"
             class:active={appStore.activeTool === tool.id}
             title={`${tool.label} (${tool.key})`}
-            onclick={() => appStore.setActiveTool(tool.id)}
+            onclick={() => { appStore.setActiveTool(tool.id); if (engine) engine.stage.container().style.cursor = cursorForTool(tool.id); }}
           >
             {@html tool.icon}
           </button>

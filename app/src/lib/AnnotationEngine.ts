@@ -82,7 +82,25 @@ export class AnnotationEngine {
     this.uiLayer.batchDraw();
   }
 
-  private createNode(ann: Annotation): Konva.Node | null {
+  // ── Live preview ────────────────────────────────────────────────────
+
+  /** Show a single Konva node on the preview layer (replaces previous). */
+  showPreview(node: Konva.Node) {
+    this.previewLayer.destroyChildren();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.previewLayer.add(node as any);
+    this.previewLayer.batchDraw();
+  }
+
+  /** Clear all preview shapes. */
+  clearPreview() {
+    this.previewLayer.destroyChildren();
+    this.previewLayer.batchDraw();
+  }
+
+  // ── Node factory (public for preview use) ───────────────────────────
+
+  createNode(ann: Annotation): Konva.Node | null {
     switch (ann.type) {
       case 'rect': return this.createRect(ann);
       case 'ellipse': return this.createEllipse(ann);
@@ -213,6 +231,63 @@ export class AnnotationEngine {
       height: ann.height,
       fill: 'rgba(180,180,200,0.5)',
       draggable: true,
+    });
+  }
+
+  // ── Inline text editing ─────────────────────────────────────────────
+
+  /**
+   * Open an HTML textarea over the canvas at the given stage-relative
+   * position.  Returns a Promise that resolves with the entered text
+   * (or empty string if cancelled).
+   */
+  openTextInput(stageX: number, stageY: number, color: string): Promise<string> {
+    return new Promise((resolve) => {
+      const container = this.stage.container();
+      const containerRect = container.getBoundingClientRect();
+      // Convert stage coordinates to screen coordinates.
+      const scaleX = containerRect.width / this.stage.width();
+      const scaleY = containerRect.height / this.stage.height();
+
+      const textarea = document.createElement('textarea');
+      textarea.style.position = 'absolute';
+      textarea.style.left = `${containerRect.left + stageX * scaleX}px`;
+      textarea.style.top = `${containerRect.top + stageY * scaleY}px`;
+      textarea.style.minWidth = '120px';
+      textarea.style.minHeight = '28px';
+      textarea.style.padding = '4px 6px';
+      textarea.style.border = `2px solid ${color}`;
+      textarea.style.borderRadius = '5px';
+      textarea.style.background = 'rgba(255,255,255,0.95)';
+      textarea.style.color = color;
+      textarea.style.fontSize = '14px';
+      textarea.style.fontFamily = '-apple-system, BlinkMacSystemFont, sans-serif';
+      textarea.style.outline = 'none';
+      textarea.style.resize = 'both';
+      textarea.style.zIndex = '9999';
+      textarea.style.boxShadow = '0 2px 12px rgba(0,0,0,0.25)';
+
+      document.body.appendChild(textarea);
+      textarea.focus();
+
+      const finish = () => {
+        const text = textarea.value.trim();
+        textarea.remove();
+        resolve(text);
+      };
+
+      textarea.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          finish();
+        }
+        if (e.key === 'Escape') {
+          textarea.value = '';
+          finish();
+        }
+      });
+
+      textarea.addEventListener('blur', finish, { once: true });
     });
   }
 
