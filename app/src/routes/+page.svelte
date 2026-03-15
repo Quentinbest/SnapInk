@@ -11,14 +11,19 @@
   const PALETTE = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#007AFF', '#AF52DE', '#1D1D1F', '#FFFFFF'];
 
   let canvasContainer = $state<HTMLDivElement | undefined>(undefined);
-  let engine: AnnotationEngine | null = null;
+  let engine = $state<AnnotationEngine | null>(null);
   let canvasWidth = $state(780);
   let canvasHeight = $state(440);
-  let isDrawing = $state(false);
-  let drawStart = $state<Point | null>(null);
-  let previewAnnotation = $state<Partial<Annotation> | null>(null);
-  let penPoints = $state<number[]>([]);
-  let lastMouseEvent = $state<MouseEvent | null>(null);
+
+  // Drawing state — plain variables (NOT $state) because they are only
+  // read/written inside Konva event handlers, never in the template.
+  // Using $state here would trigger Svelte 5 reactivity flushes inside
+  // Konva's synchronous event dispatch, which can cause stale reads.
+  let isDrawing = false;
+  let drawStart: Point | null = null;
+  let penPoints: number[] = [];
+  let lastMouseEvent: MouseEvent | null = null;
+
   let unlisten: UnlistenFn | null = null;
   let unlistenNewCapture: UnlistenFn | null = null;
   let currentFilename = $state('');
@@ -145,7 +150,11 @@
     stage.on('mousedown', (e) => {
       const tool = appStore.activeTool;
       if (tool === 'select') {
-        if (e.target === stage) appStore.selectAnnotation(null);
+        // Deselect when clicking the stage OR the base image (which covers
+        // the entire stage).  The old `e.target === stage` check never
+        // matched because clicks always land on the base Konva.Image node.
+        const isBackground = e.target === stage || e.target?.getLayer() === engine?.baseLayer;
+        if (isBackground) appStore.selectAnnotation(null);
         return;
       }
       const pos = stage.getPointerPosition();
@@ -436,7 +445,14 @@
         const input = document.createElement('input');
         input.type = 'color';
         input.value = appStore.activeColor;
-        input.onchange = () => appStore.setActiveColor(input.value);
+        // Must be in the DOM for WebKit/Tauri to open the native picker.
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        input.style.pointerEvents = 'none';
+        document.body.appendChild(input);
+        input.oninput = () => appStore.setActiveColor(input.value);
+        input.onchange = () => { appStore.setActiveColor(input.value); input.remove(); };
+        input.addEventListener('blur', () => input.remove(), { once: true });
         input.click();
       }}></button>
     </div>

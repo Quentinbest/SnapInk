@@ -50,7 +50,7 @@ export class AnnotationEngine {
     this.baseLayer.destroyChildren();
     const img = new Image();
     img.onload = () => {
-      const kImg = new Konva.Image({ image: img, x: 0, y: 0, width: this.stage.width(), height: this.stage.height() });
+      const kImg = new Konva.Image({ image: img, x: 0, y: 0, width: this.stage.width(), height: this.stage.height(), listening: false });
       this.baseLayer.add(kImg);
       this.baseLayer.batchDraw();
       onLoad?.();
