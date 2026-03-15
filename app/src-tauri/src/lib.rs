@@ -10,13 +10,17 @@ use capture_store::CaptureStore;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WebviewUrl, WebviewWindowBuilder,
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 fn open_editor_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("editor") {
         let _ = win.show();
         let _ = win.set_focus();
+        // The editor is already mounted (we hide rather than destroy it).
+        // onMount won't re-fire, so emit an event to trigger the frontend
+        // to consume the new capture result from the store.
+        let _ = win.emit("new-capture-ready", ());
         return;
     }
     let result = WebviewWindowBuilder::new(app, "editor", WebviewUrl::App("/".into()))

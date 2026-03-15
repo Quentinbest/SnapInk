@@ -20,6 +20,7 @@
   let penPoints = $state<number[]>([]);
   let lastMouseEvent = $state<MouseEvent | null>(null);
   let unlisten: UnlistenFn | null = null;
+  let unlistenNewCapture: UnlistenFn | null = null;
   let currentFilename = $state('');
 
   const tools: { id: ToolType; label: string; key: string; icon: string }[] = [
@@ -87,10 +88,28 @@
       appStore.setCaptureImageData(event.payload.imageData);
       setFilenameFromNow();
     });
+
+    // Fired when the editor window is re-shown for a new capture (the window
+    // is hidden rather than destroyed between captures, so onMount does not
+    // re-run). Consume the pending result from CaptureStore just like onMount.
+    unlistenNewCapture = await listen('new-capture-ready', async () => {
+      try {
+        const pending = await invoke<string | null>('consume_capture_result');
+        if (pending) {
+          appStore.setCaptureImageData(pending);
+          setFilenameFromNow();
+        } else {
+          console.warn('new-capture-ready fired but no capture result in store');
+        }
+      } catch (e) {
+        console.error('Failed to consume new capture result:', e);
+      }
+    });
   });
 
   onDestroy(() => {
     unlisten?.();
+    unlistenNewCapture?.();
     engine?.destroy();
   });
 
