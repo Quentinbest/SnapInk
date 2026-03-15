@@ -19,6 +19,12 @@ export class AnnotationEngine {
   uiLayer: Konva.Layer;
   transformer: Konva.Transformer;
 
+  /** Draggable endpoint handles shown when a line/arrow is selected. */
+  private lineHandleGroup: Konva.Group | null = null;
+
+  /** Called when a line/arrow endpoint is dragged and released. */
+  onLineEndpointMoved?: (id: string, x1: number, y1: number, x2: number, y2: number) => void;
+
   constructor(container: HTMLDivElement, width: number, height: number) {
     this.stage = new Konva.Stage({ container, width, height });
 
@@ -70,27 +76,96 @@ export class AnnotationEngine {
     }
     if (selectedId) {
       const node = this.annotationLayer.findOne(`#${selectedId}`);
-      if (node) {
-        this.transformer.nodes([node]);
-        // Disable resize anchors only for step (fixed-size numbered circle).
-        const ann = annotations.find((a) => a.id === selectedId);
-        if (ann && ann.type === 'step') {
-          this.transformer.enabledAnchors([]);
+      const ann = annotations.find((a) => a.id === selectedId);
+      if (node && ann) {
+        if (ann.type === 'line' || ann.type === 'arrow') {
+          // Use draggable endpoint circles instead of the bounding-box Transformer.
+          this.transformer.nodes([]);
+          this.showLineHandles(ann as LineAnnotation | ArrowAnnotation);
         } else {
-          this.transformer.enabledAnchors([
-            'top-left', 'top-center', 'top-right',
-            'middle-left', 'middle-right',
-            'bottom-left', 'bottom-center', 'bottom-right',
-          ]);
+          this.hideLineHandles();
+          this.transformer.nodes([node]);
+          // Disable resize anchors only for step (fixed-size numbered circle).
+          if (ann.type === 'step') {
+            this.transformer.enabledAnchors([]);
+          } else {
+            this.transformer.enabledAnchors([
+              'top-left', 'top-center', 'top-right',
+              'middle-left', 'middle-right',
+              'bottom-left', 'bottom-center', 'bottom-right',
+            ]);
+          }
         }
       } else {
+        this.hideLineHandles();
         this.transformer.nodes([]);
       }
     } else {
+      this.hideLineHandles();
       this.transformer.nodes([]);
     }
     this.annotationLayer.batchDraw();
     this.uiLayer.batchDraw();
+  }
+
+  // ── Endpoint handles for line / arrow ───────────────────────────────
+
+  /**
+   * Replace the Transformer with two draggable circles at the line endpoints.
+   * During drag: updates the annotation node in real-time.
+   * On dragend: calls onLineEndpointMoved to persist to the store.
+   */
+  showLineHandles(ann: LineAnnotation | ArrowAnnotation) {
+    this.hideLineHandles();
+
+    const { id, x1, y1, x2, y2 } = ann;
+
+    const makeHandle = (x: number, y: number) => new Konva.Circle({
+      x, y,
+      radius: 6,
+      fill: 'white',
+      stroke: '#0A84FF',
+      strokeWidth: 1.5,
+      draggable: true,
+      hitStrokeWidth: 12,
+    });
+
+    const h1 = makeHandle(x1, y1);
+    const h2 = makeHandle(x2, y2);
+
+    // Live update the annotation line during drag.
+    const updateLine = () => {
+      const lineNode = this.annotationLayer.findOne(`#${id}`) as Konva.Line | null;
+      if (lineNode) {
+        lineNode.points([h1.x(), h1.y(), h2.x(), h2.y()]);
+        this.annotationLayer.batchDraw();
+      }
+    };
+    h1.on('dragmove', updateLine);
+    h2.on('dragmove', updateLine);
+
+    // Persist final endpoint positions to the store.
+    const persist = () => {
+      this.onLineEndpointMoved?.(id, h1.x(), h1.y(), h2.x(), h2.y());
+    };
+    h1.on('dragend', persist);
+    h2.on('dragend', persist);
+
+    const group = new Konva.Group();
+    group.add(h1);
+    group.add(h2);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.uiLayer.add(group as any);
+    this.uiLayer.batchDraw();
+    this.lineHandleGroup = group;
+  }
+
+  hideLineHandles() {
+    if (this.lineHandleGroup) {
+      this.lineHandleGroup.destroy();
+      this.lineHandleGroup = null;
+      this.uiLayer.batchDraw();
+    }
   }
 
   // ── Live preview ────────────────────────────────────────────────────
@@ -163,13 +238,16 @@ export class AnnotationEngine {
   }
 
   private createArrow(ann: ArrowAnnotation): Konva.Arrow {
+    const style = ann.headStyle ?? (ann.filledHead ? 'filled' : 'open');
     return new Konva.Arrow({
       points: [ann.x1, ann.y1, ann.x2, ann.y2],
       stroke: ann.color,
       strokeWidth: ann.strokeWidth,
-      fill: ann.filledHead ? ann.color : 'transparent',
+      fill: (style === 'filled' || style === 'both') ? ann.color : 'transparent',
       pointerLength: 10,
       pointerWidth: 8,
+      pointerAtBeginning: style === 'both',
+      pointerAtEnding: style !== 'none',
       lineCap: 'round',
       draggable: true,
     });

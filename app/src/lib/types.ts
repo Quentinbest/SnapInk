@@ -128,6 +128,7 @@ export interface ArrowAnnotation extends AnnotationBase {
   x2: number;
   y2: number;
   filledHead: boolean;
+  headStyle?: 'filled' | 'open' | 'both' | 'none';
 }
 
 export interface TextAnnotation extends AnnotationBase {

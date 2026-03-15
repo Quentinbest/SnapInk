@@ -6,10 +6,26 @@
   import { save } from '@tauri-apps/plugin-dialog';
   import { appStore } from '$lib/stores.svelte';
   import { AnnotationEngine } from '$lib/AnnotationEngine';
-  import type { Annotation, ToolType, Point } from '$lib/types';
+  import type { Annotation, ArrowAnnotation, ToolType, Point } from '$lib/types';
   import Konva from 'konva';
 
   const PALETTE = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#007AFF', '#AF52DE', '#1D1D1F', '#FFFFFF'];
+
+  const ARROW_HEAD_STYLES: { id: ArrowAnnotation['headStyle']; label: string; icon: string }[] = [
+    { id: 'filled', label: 'Filled arrowhead',  icon: `<svg viewBox="0 0 24 8" fill="none"><line x1="1" y1="4" x2="18" y2="4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polygon points="14,1 22,4 14,7" fill="currentColor"/></svg>` },
+    { id: 'open',   label: 'Open arrowhead',    icon: `<svg viewBox="0 0 24 8" fill="none"><line x1="1" y1="4" x2="18" y2="4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polyline points="14,1 22,4 14,7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+    { id: 'both',   label: 'Double arrowhead',  icon: `<svg viewBox="0 0 24 8" fill="none"><line x1="3" y1="4" x2="21" y2="4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polygon points="7,1 1,4 7,7" fill="currentColor"/><polygon points="17,1 23,4 17,7" fill="currentColor"/></svg>` },
+    { id: 'none',   label: 'No arrowhead (line)',icon: `<svg viewBox="0 0 24 8" fill="none"><line x1="1" y1="4" x2="23" y2="4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>` },
+  ];
+
+  // The currently selected annotation if it is an arrow (for the style picker).
+  const selectedArrow = $derived(
+    appStore.selectedAnnotationId
+      ? (appStore.annotations.find(
+          (a) => a.id === appStore.selectedAnnotationId && a.type === 'arrow'
+        ) as ArrowAnnotation | undefined)
+      : undefined
+  );
 
   let canvasContainer = $state<HTMLDivElement | undefined>(undefined);
   let engine = $state<AnnotationEngine | null>(null);
@@ -159,6 +175,11 @@
     const stage = engine.stage;
     const container = stage.container();
     container.style.cursor = cursorForTool(appStore.activeTool);
+
+    // Persist line/arrow endpoint drags to the store.
+    engine.onLineEndpointMoved = (id, x1, y1, x2, y2) => {
+      appStore.updateAnnotation(id, { x1, y1, x2, y2 });
+    };
 
     stage.on('mousedown', (e) => {
       const tool = appStore.activeTool;
@@ -620,6 +641,24 @@
 
       <div class="toolbar-divider"></div>
 
+      {#if selectedArrow}
+        <div class="toolbar-divider"></div>
+        <!-- Arrow head style picker -->
+        <div class="tool-group">
+          {#each ARROW_HEAD_STYLES as style}
+            <button
+              class="tool-btn arrow-style-btn"
+              class:active={(selectedArrow.headStyle ?? 'filled') === style.id}
+              title={style.label}
+              onclick={() => appStore.updateAnnotation(selectedArrow!.id, { headStyle: style.id })}
+            >
+              {@html style.icon}
+            </button>
+          {/each}
+        </div>
+        <div class="toolbar-divider"></div>
+      {/if}
+
       <!-- Actions -->
       <div class="tool-group">
         <button class="tool-btn" title="Save (⌘S)" onclick={saveToFile}>
@@ -802,6 +841,15 @@
 .tool-btn :global(svg) {
   width: 16px;
   height: 16px;
+}
+
+.arrow-style-btn {
+  width: 40px;
+}
+
+.arrow-style-btn :global(svg) {
+  width: 24px;
+  height: 8px;
 }
 
 .tool-btn:hover {
