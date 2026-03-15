@@ -52,19 +52,29 @@
 
   $effect(() => {
     if (!canvasContainer || !appStore.captureImageData) return;
+    // Snapshot both reactive values so the async callback below always uses
+    // the data that was current when this effect run started.
+    const captureData = appStore.captureImageData;
+    const container = canvasContainer;
+    let active = true; // Set to false in cleanup if the effect re-runs first.
+
     const img = new Image();
     img.onload = () => {
+      if (!active) return; // A newer effect run superseded this one.
       canvasWidth = Math.min(img.width, 1040);
       canvasHeight = Math.round((canvasWidth / img.width) * img.height);
-      if (engine) {
-        engine.resize(canvasWidth, canvasHeight);
-      } else if (canvasContainer) {
-        engine = new AnnotationEngine(canvasContainer, canvasWidth, canvasHeight);
-        setupStageEvents();
-      }
-      engine!.setBaseImage(`data:image/png;base64,${appStore.captureImageData}`);
+      // Always destroy and recreate so the stage is bound to the current
+      // container element. If we only resize, the stage can end up attached
+      // to a detached DOM node (e.g. after cancel → new capture), making all
+      // Konva mouse events fire on an invisible canvas that nothing renders.
+      engine?.destroy();
+      engine = new AnnotationEngine(container, canvasWidth, canvasHeight);
+      setupStageEvents();
+      engine.setBaseImage(`data:image/png;base64,${captureData}`);
     };
-    img.src = `data:image/png;base64,${appStore.captureImageData}`;
+    img.src = `data:image/png;base64,${captureData}`;
+
+    return () => { active = false; };
   });
 
   $effect(() => {
