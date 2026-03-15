@@ -72,6 +72,17 @@ export class AnnotationEngine {
       const node = this.annotationLayer.findOne(`#${selectedId}`);
       if (node) {
         this.transformer.nodes([node]);
+        // Only enable resize anchors for shapes with natural dimensions.
+        const ann = annotations.find((a) => a.id === selectedId);
+        if (ann && (ann.type === 'line' || ann.type === 'arrow' || ann.type === 'pen' || ann.type === 'step')) {
+          this.transformer.enabledAnchors([]);
+        } else {
+          this.transformer.enabledAnchors([
+            'top-left', 'top-center', 'top-right',
+            'middle-left', 'middle-right',
+            'bottom-left', 'bottom-center', 'bottom-right',
+          ]);
+        }
       } else {
         this.transformer.nodes([]);
       }
@@ -250,7 +261,7 @@ export class AnnotationEngine {
       const scaleY = containerRect.height / this.stage.height();
 
       const textarea = document.createElement('textarea');
-      textarea.style.position = 'absolute';
+      textarea.style.position = 'fixed';
       textarea.style.left = `${containerRect.left + stageX * scaleX}px`;
       textarea.style.top = `${containerRect.top + stageY * scaleY}px`;
       textarea.style.minWidth = '120px';
@@ -268,15 +279,20 @@ export class AnnotationEngine {
       textarea.style.boxShadow = '0 2px 12px rgba(0,0,0,0.25)';
 
       document.body.appendChild(textarea);
-      textarea.focus();
 
+      let finished = false;
       const finish = () => {
+        if (finished) return;
+        finished = true;
         const text = textarea.value.trim();
         textarea.remove();
         resolve(text);
       };
 
       textarea.addEventListener('keydown', (e) => {
+        // Stop propagation so the window-level keydown handler
+        // (which handles Escape for deselect, etc.) doesn't interfere.
+        e.stopPropagation();
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           finish();
@@ -287,7 +303,14 @@ export class AnnotationEngine {
         }
       });
 
-      textarea.addEventListener('blur', finish, { once: true });
+      // Delay focus and blur registration to the next frame so the
+      // browser finishes processing the mousedown that triggered this
+      // (otherwise the canvas recaptures focus and blurs the textarea
+      // before the user can type).
+      requestAnimationFrame(() => {
+        textarea.focus();
+        textarea.addEventListener('blur', finish, { once: true });
+      });
     });
   }
 

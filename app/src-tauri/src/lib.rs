@@ -66,7 +66,7 @@ fn open_capture_window(app: &tauri::AppHandle, mode: &str) {
     // compositor is still in a transitional state and returns only the
     // desktop wallpaper instead of all on-screen windows.
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(std::time::Duration::from_millis(350));
 
         // Take the background screenshot BEFORE the capture window opens so
         // the overlay never appears in the frozen background image.

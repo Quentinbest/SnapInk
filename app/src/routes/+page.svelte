@@ -177,6 +177,8 @@
       if (tool === 'text') {
         const pos = stage.getPointerPosition();
         if (!pos || !engine) return;
+        // Prevent the canvas from recapturing focus away from the textarea.
+        e.evt.preventDefault();
         engine.openTextInput(pos.x, pos.y, appStore.activeColor).then((text) => {
           if (text) {
             addAnnotation({
@@ -286,6 +288,75 @@
       }
     });
 
+    // Persist resize changes from the Transformer to the store.
+    stage.on('transformend', (e) => {
+      const node = e.target;
+      const id = node.id();
+      if (!id) return;
+      const ann = appStore.annotations.find((a) => a.id === id);
+      if (!ann) return;
+
+      if (ann.type === 'rect' || ann.type === 'blur') {
+        appStore.updateAnnotation(id, {
+          x: node.x(),
+          y: node.y(),
+          width: Math.max(1, node.width() * node.scaleX()),
+          height: Math.max(1, node.height() * node.scaleY()),
+        });
+      } else if (ann.type === 'ellipse') {
+        const el = node as any;
+        appStore.updateAnnotation(id, {
+          x: node.x(),
+          y: node.y(),
+          radiusX: Math.max(1, el.radiusX() * node.scaleX()),
+          radiusY: Math.max(1, el.radiusY() * node.scaleY()),
+        });
+      } else if (ann.type === 'text') {
+        appStore.updateAnnotation(id, {
+          x: node.x(),
+          y: node.y(),
+        });
+      }
+      // Reset scale so the re-render from the $effect doesn't double-apply it.
+      node.scaleX(1);
+      node.scaleY(1);
+    });
+
+    // Persist dragged positions to the store so the $effect doesn't snap
+    // nodes back to their original coordinates when it re-renders.
+    stage.on('dragend', (e) => {
+      const node = e.target;
+      const id = node.id();
+      if (!id || id === '__preview') return;
+      const ann = appStore.annotations.find((a) => a.id === id);
+      if (!ann) return;
+
+      if (ann.type === 'line' || ann.type === 'arrow') {
+        // Line/arrow nodes have no initial x/y — Konva sets x()/y() as the drag delta.
+        const dx = node.x();
+        const dy = node.y();
+        appStore.updateAnnotation(id, {
+          x1: (ann as any).x1 + dx,
+          y1: (ann as any).y1 + dy,
+          x2: (ann as any).x2 + dx,
+          y2: (ann as any).y2 + dy,
+        });
+      } else if (ann.type === 'pen') {
+        const dx = node.x();
+        const dy = node.y();
+        const oldPoints = (ann as any).points as number[];
+        const newPoints: number[] = [];
+        for (let i = 0; i < oldPoints.length; i += 2) {
+          newPoints.push(oldPoints[i] + dx);
+          newPoints.push(oldPoints[i + 1] + dy);
+        }
+        appStore.updateAnnotation(id, { points: newPoints });
+      } else {
+        // rect, ellipse, text, step, blur — node.x()/y() is the new absolute position.
+        appStore.updateAnnotation(id, { x: node.x(), y: node.y() });
+      }
+    });
+
     stage.on('mouseup', () => {
       if (!isDrawing || !drawStart || !engine) return;
       const pos = stage.getPointerPosition();
@@ -362,6 +433,8 @@
       ...partial,
     } as Annotation;
     appStore.addAnnotation(ann);
+    // Auto-select the new annotation so the transformer (resize handles) appears.
+    appStore.selectAnnotation(ann.id);
   }
 
   function onKeyDown(e: KeyboardEvent) {
