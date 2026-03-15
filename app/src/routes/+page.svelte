@@ -7,6 +7,7 @@
   import { appStore } from '$lib/stores.svelte';
   import { AnnotationEngine } from '$lib/AnnotationEngine';
   import type { Annotation, ToolType, Point } from '$lib/types';
+  import Konva from 'konva';
 
   const PALETTE = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#007AFF', '#AF52DE', '#1D1D1F', '#FFFFFF'];
 
@@ -292,8 +293,12 @@
     });
 
     // Persist resize changes from the Transformer to the store.
-    stage.on('transformend', (e) => {
-      const node = e.target;
+    // NOTE: Konva v10 Transformer uses _fire() (no bubble) for transformend,
+    // so stage.on('transformend') never fires. Listen on the transformer directly.
+    engine.transformer.on('transformend', (e: any) => {
+      // The transformer fires with { target: annotationNode } in the event payload.
+      const node: Konva.Node = e.target;
+      if (!node) return;
       const id = node.id();
       if (!id) return;
       const ann = appStore.annotations.find((a) => a.id === id);
