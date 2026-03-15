@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { writeText, writeImage } from '@tauri-apps/plugin-clipboard-manager';
@@ -50,53 +50,48 @@
   function cancelIcon() { return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>`; }
   function doneIcon() { return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="3,8 7,12 13,4"/></svg>`; }
 
-  $effect(() => {
-    if (!canvasContainer || !appStore.captureImageData) return;
-    // Snapshot both reactive values so the async callback below always uses
-    // the data that was current when this effect run started.
-    const captureData = appStore.captureImageData;
+  // Load a new capture: update the store, wait for the {#if} block to render
+  // the canvasContainer div, then build a fresh Konva engine inside it.
+  // Using tick() instead of $effect avoids the Svelte 5 cleanup/flush race
+  // where $state writes inside img.onload cancel the very callback that sets
+  // up the engine, leaving the stage without any mouse-event handlers.
+  async function loadCapture(data: string) {
+    appStore.setCaptureImageData(data);
+    setFilenameFromNow();
+    await tick(); // Ensure the {#if captureImageData} DOM block has rendered.
+    if (!canvasContainer) {
+      console.error('canvasContainer unavailable after tick');
+      return;
+    }
     const container = canvasContainer;
-    let active = true; // Set to false in cleanup if the effect re-runs first.
-
     const img = new Image();
     img.onload = () => {
-      if (!active) return; // A newer effect run superseded this one.
       canvasWidth = Math.min(img.width, 1040);
       canvasHeight = Math.round((canvasWidth / img.width) * img.height);
-      // Always destroy and recreate so the stage is bound to the current
-      // container element. If we only resize, the stage can end up attached
-      // to a detached DOM node (e.g. after cancel → new capture), making all
-      // Konva mouse events fire on an invisible canvas that nothing renders.
       engine?.destroy();
       engine = new AnnotationEngine(container, canvasWidth, canvasHeight);
       setupStageEvents();
-      engine.setBaseImage(`data:image/png;base64,${captureData}`);
+      engine.setBaseImage(`data:image/png;base64,${data}`);
     };
-    img.src = `data:image/png;base64,${captureData}`;
-
-    return () => { active = false; };
-  });
+    img.src = `data:image/png;base64,${data}`;
+  }
 
   $effect(() => {
     engine?.renderAnnotations(appStore.annotations, appStore.selectedAnnotationId);
   });
 
   onMount(async () => {
-    // Consume any pending capture result stored by the Rust backend
+    // Consume any pending capture result stored by the Rust backend.
     try {
       const pending = await invoke<string | null>('consume_capture_result');
-      if (pending) {
-        appStore.setCaptureImageData(pending);
-        setFilenameFromNow();
-      }
+      if (pending) await loadCapture(pending);
     } catch (e) {
-      console.error(e);
+      console.error('Failed to load initial capture:', e);
     }
 
-    // Keep event listener for future compatibility
-    unlisten = await listen<{ imageData: string; mode: string }>('capture-complete', (event) => {
-      appStore.setCaptureImageData(event.payload.imageData);
-      setFilenameFromNow();
+    // Keep event listener for future compatibility.
+    unlisten = await listen<{ imageData: string; mode: string }>('capture-complete', async (event) => {
+      await loadCapture(event.payload.imageData);
     });
 
     // Fired when the editor window is re-shown for a new capture (the window
@@ -106,8 +101,7 @@
       try {
         const pending = await invoke<string | null>('consume_capture_result');
         if (pending) {
-          appStore.setCaptureImageData(pending);
-          setFilenameFromNow();
+          await loadCapture(pending);
         } else {
           console.warn('new-capture-ready fired but no capture result in store');
         }
@@ -326,8 +320,7 @@
   async function loadFromClipboard() {
     try {
       const data = await invoke<string>('read_clipboard_image');
-      appStore.setCaptureImageData(data);
-      setFilenameFromNow();
+      await loadCapture(data);
     } catch (e) {
       console.error('No image in clipboard', e);
     }
