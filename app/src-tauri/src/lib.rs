@@ -19,13 +19,24 @@ fn open_editor_window(app: &tauri::AppHandle) {
         let _ = win.set_focus();
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "editor", WebviewUrl::App("/".into()))
+    let result = WebviewWindowBuilder::new(app, "editor", WebviewUrl::App("/".into()))
         .title("SnapInk")
         .inner_size(1100.0, 700.0)
         .min_inner_size(800.0, 500.0)
         .resizable(true)
         .decorations(true)
         .build();
+    // Hide the editor window on close instead of destroying it so the app
+    // keeps running as a menu bar agent (LSUIElement = true).
+    if let Ok(win) = result {
+        let w = win.clone();
+        win.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = w.hide();
+            }
+        });
+    }
 }
 
 fn open_settings_window(app: &tauri::AppHandle) {
@@ -43,52 +54,66 @@ fn open_settings_window(app: &tauri::AppHandle) {
 }
 
 fn open_capture_window(app: &tauri::AppHandle, mode: &str) {
-    // Take the background screenshot BEFORE the capture window opens so the
-    // overlay never appears in the frozen background image.
-    if mode == "area" || mode == "window" || mode == "screen" {
-        if let Ok(store) = app.try_state::<CaptureStore>().ok_or("") {
-            match capture::take_screenshot_sync() {
-                Ok(data) => {
-                    *store.background.lock().unwrap() = Some(data);
-                    *store.result.lock().unwrap() = None;
-                }
-                Err(e) => eprintln!("pre-capture screenshot failed: {}", e),
-            }
-        }
-    }
+    let app = app.clone();
+    let mode = mode.to_string();
+    // Run in a background thread so the tray menu event handler returns
+    // immediately. The 200ms delay lets macOS fully dismiss the tray menu
+    // popup before we call CGWindowListCreateImage — without this delay the
+    // compositor is still in a transitional state and returns only the
+    // desktop wallpaper instead of all on-screen windows.
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // For full-screen mode, the result is already stored; open editor directly.
-    if mode == "screen" {
-        let result = app
-            .try_state::<CaptureStore>()
-            .and_then(|s| s.background.lock().unwrap().clone());
-        if let Some(data) = result {
+        // Take the background screenshot BEFORE the capture window opens so
+        // the overlay never appears in the frozen background image.
+        if mode == "area" || mode == "window" || mode == "screen" {
             if let Some(store) = app.try_state::<CaptureStore>() {
-                *store.result.lock().unwrap() = Some(data);
+                match capture::take_screenshot_sync() {
+                    Ok(data) => {
+                        *store.background.lock().unwrap() = Some(data);
+                        *store.result.lock().unwrap() = None;
+                    }
+                    Err(e) => eprintln!("pre-capture screenshot failed: {}", e),
+                }
             }
-            open_editor_window(app);
-            return;
         }
-    }
 
-    if let Some(win) = app.get_webview_window("capture") {
-        let _ = win.close();
-    }
+        // For full-screen mode the result is already stored; open editor directly.
+        if mode == "screen" {
+            let result = app
+                .try_state::<CaptureStore>()
+                .and_then(|s| s.background.lock().unwrap().clone());
+            if let Some(data) = result {
+                if let Some(store) = app.try_state::<CaptureStore>() {
+                    *store.result.lock().unwrap() = Some(data);
+                }
+                open_editor_window(&app);
+                return;
+            }
+        }
 
-    let url = format!("/capture?mode={}", mode);
-    if let Some(monitor) = app.primary_monitor().ok().flatten() {
-        let size = monitor.size();
-        let pos = monitor.position();
-        let _ = WebviewWindowBuilder::new(app, "capture", WebviewUrl::App(url.into()))
-            .title("SnapInk Capture")
-            .inner_size(size.width as f64, size.height as f64)
-            .position(pos.x as f64, pos.y as f64)
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .build();
-    }
+        if let Some(win) = app.get_webview_window("capture") {
+            let _ = win.close();
+        }
+
+        let url = format!("/capture?mode={}", mode);
+        if let Some(monitor) = app.primary_monitor().ok().flatten() {
+            let size = monitor.size();
+            let pos = monitor.position();
+            // Start hidden; the frontend calls show() once the screenshot
+            // background is rendered — prevents the black/white flash.
+            let _ = WebviewWindowBuilder::new(&app, "capture", WebviewUrl::App(url.into()))
+                .title("SnapInk Capture")
+                .inner_size(size.width as f64, size.height as f64)
+                .position(pos.x as f64, pos.y as f64)
+                .decorations(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .visible(false)
+                .build();
+        }
+    });
 }
 
 #[tauri::command]

@@ -36,6 +36,11 @@
     } catch (e) {
       console.error(e);
     }
+    // Show the window only after the screenshot background is ready to render.
+    // The window starts hidden (visible: false in Rust) to prevent the
+    // black/white flash that would occur while the webview is loading.
+    await appWindow.show();
+    await appWindow.setFocus();
   });
 
 
