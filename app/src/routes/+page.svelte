@@ -468,6 +468,15 @@
     appStore.selectAnnotation(ann.id);
   }
 
+  // Set the active color AND recolor the currently selected annotation (if any).
+  function pickColor(color: string) {
+    if (!color) return;
+    appStore.setActiveColor(color);
+    if (appStore.selectedAnnotationId) {
+      appStore.updateAnnotation(appStore.selectedAnnotationId, { color });
+    }
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -639,7 +648,7 @@
           class:active={appStore.activeColor === color}
           style={`background:${color}`}
           title={color}
-          onclick={() => appStore.setActiveColor(color)}
+          onclick={() => pickColor(color)}
         ></button>
       {/each}
       <div class="palette-divider"></div>
@@ -647,8 +656,8 @@
         <input
           type="color"
           value={appStore.activeColor}
-          oninput={(e) => appStore.setActiveColor(e.currentTarget.value)}
-          onchange={(e) => appStore.setActiveColor(e.currentTarget.value)}
+          oninput={(e) => pickColor(e.currentTarget.value)}
+          onchange={(e) => pickColor(e.currentTarget.value)}
           class="custom-color-input"
         />
       </label>
