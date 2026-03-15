@@ -50,30 +50,44 @@
   function cancelIcon() { return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>`; }
   function doneIcon() { return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="3,8 7,12 13,4"/></svg>`; }
 
-  // Load a new capture: update the store, wait for the {#if} block to render
-  // the canvasContainer div, then build a fresh Konva engine inside it.
-  // Using tick() instead of $effect avoids the Svelte 5 cleanup/flush race
-  // where $state writes inside img.onload cancel the very callback that sets
-  // up the engine, leaving the stage without any mouse-event handlers.
+  // Load an image element and resolve with its natural dimensions.
+  function loadImage(src: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  // Load a new capture: get the image dimensions first, then build the
+  // Konva engine synchronously after DOM updates.  Everything after the
+  // two awaits is synchronous — no $state writes inside callbacks, which
+  // avoids the Svelte 5 reactivity flush that was destroying the Konva
+  // stage event handlers before they could be registered.
   async function loadCapture(data: string) {
     appStore.setCaptureImageData(data);
     setFilenameFromNow();
-    await tick(); // Ensure the {#if captureImageData} DOM block has rendered.
+
+    // 1. Load image to learn dimensions (also yields so Svelte can flush
+    //    the {#if captureImageData} DOM block into existence).
+    const dataUrl = `data:image/png;base64,${data}`;
+    const img = await loadImage(dataUrl);
+
+    // 2. Set wrapper dimensions and wait for DOM to update.
+    canvasWidth = Math.min(img.width, 1040);
+    canvasHeight = Math.round((canvasWidth / img.width) * img.height);
+    await tick();
+
+    // 3. Synchronously create engine, wire events, set background.
     if (!canvasContainer) {
       console.error('canvasContainer unavailable after tick');
       return;
     }
-    const container = canvasContainer;
-    const img = new Image();
-    img.onload = () => {
-      canvasWidth = Math.min(img.width, 1040);
-      canvasHeight = Math.round((canvasWidth / img.width) * img.height);
-      engine?.destroy();
-      engine = new AnnotationEngine(container, canvasWidth, canvasHeight);
-      setupStageEvents();
-      engine.setBaseImage(`data:image/png;base64,${data}`);
-    };
-    img.src = `data:image/png;base64,${data}`;
+    engine?.destroy();
+    engine = new AnnotationEngine(canvasContainer, canvasWidth, canvasHeight);
+    setupStageEvents();
+    engine.setBaseImage(dataUrl);
   }
 
   $effect(() => {
