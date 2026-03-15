@@ -164,6 +164,9 @@
 
       // ── Select mode ───────────────────────────────────────────────
       if (tool === 'select') {
+        // Don't interfere with transformer handle interactions (resize anchors).
+        if (e.target?.getLayer() === engine?.uiLayer) return;
+
         const isBackground = e.target === stage || e.target?.getLayer() === engine?.baseLayer;
         if (isBackground) {
           appStore.selectAnnotation(null);
@@ -188,7 +191,7 @@
               text,
               fontSize: 14,
               bold: false,
-              background: true,
+              background: false,
             });
           }
           appStore.setActiveTool('select');
@@ -612,20 +615,15 @@
         ></button>
       {/each}
       <div class="palette-divider"></div>
-      <button class="swatch custom" title="Custom color" onclick={() => {
-        const input = document.createElement('input');
-        input.type = 'color';
-        input.value = appStore.activeColor;
-        // Must be in the DOM for WebKit/Tauri to open the native picker.
-        input.style.position = 'fixed';
-        input.style.opacity = '0';
-        input.style.pointerEvents = 'none';
-        document.body.appendChild(input);
-        input.oninput = () => appStore.setActiveColor(input.value);
-        input.onchange = () => { appStore.setActiveColor(input.value); input.remove(); };
-        input.addEventListener('blur', () => input.remove(), { once: true });
-        input.click();
-      }}></button>
+      <label class="swatch custom" title="Custom color">
+        <input
+          type="color"
+          value={appStore.activeColor}
+          oninput={(e) => appStore.setActiveColor(e.currentTarget.value)}
+          onchange={(e) => appStore.setActiveColor(e.currentTarget.value)}
+          class="custom-color-input"
+        />
+      </label>
     </div>
   {/if}
 
@@ -827,6 +825,20 @@
 .swatch.custom {
   background: conic-gradient(red, orange, yellow, green, blue, purple, red);
   border: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.custom-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  margin: 0;
 }
 
 .palette-divider {
