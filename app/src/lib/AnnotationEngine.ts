@@ -22,6 +22,9 @@ export class AnnotationEngine {
   /** Draggable endpoint handles shown when a line/arrow is selected. */
   lineHandleGroup: Konva.Group | null = null;
 
+  /** Source image element retained so blur annotations can sample pixel data. */
+  private baseImageElement: HTMLImageElement | null = null;
+
   /** Called when a line/arrow endpoint is dragged and released. */
   onLineEndpointMoved?: (id: string, x1: number, y1: number, x2: number, y2: number) => void;
 
@@ -54,8 +57,10 @@ export class AnnotationEngine {
 
   setBaseImage(dataUrl: string, onLoad?: () => void) {
     this.baseLayer.destroyChildren();
+    this.baseImageElement = null;
     const img = new Image();
     img.onload = () => {
+      this.baseImageElement = img;
       const kImg = new Konva.Image({ image: img, x: 0, y: 0, width: this.stage.width(), height: this.stage.height(), listening: false });
       this.baseLayer.add(kImg);
       this.baseLayer.batchDraw();
@@ -314,13 +319,64 @@ export class AnnotationEngine {
     return group;
   }
 
-  private createBlur(ann: BlurAnnotation): Konva.Rect {
-    return new Konva.Rect({
+  private createBlur(ann: BlurAnnotation): Konva.Node {
+    const w = Math.round(ann.width);
+    const h = Math.round(ann.height);
+
+    // Fallback if base image not yet loaded or dimensions are degenerate.
+    if (!this.baseImageElement || w < 1 || h < 1) {
+      return new Konva.Rect({
+        x: ann.x,
+        y: ann.y,
+        width: Math.max(1, w),
+        height: Math.max(1, h),
+        fill: 'rgba(180,180,200,0.5)',
+        draggable: true,
+      });
+    }
+
+    const img = this.baseImageElement;
+    const stageW = this.stage.width();
+    const stageH = this.stage.height();
+
+    // Scale factors: stage (display) coordinates → source image pixel coordinates.
+    const sx = img.naturalWidth / stageW;
+    const sy = img.naturalHeight / stageH;
+
+    const strength = Math.max(2, Math.round(ann.strength ?? 10));
+
+    // Pixelation via scale-down then scale-up (no per-pixel getImageData loop).
+    const smallW = Math.max(1, Math.floor(w / strength));
+    const smallH = Math.max(1, Math.floor(h / strength));
+
+    // Step 1 — draw source region into a tiny canvas.
+    const small = document.createElement('canvas');
+    small.width = smallW;
+    small.height = smallH;
+    const smallCtx = small.getContext('2d');
+    if (!smallCtx) {
+      return new Konva.Rect({ x: ann.x, y: ann.y, width: w, height: h, fill: 'rgba(180,180,200,0.5)', draggable: true });
+    }
+    smallCtx.imageSmoothingEnabled = true;
+    smallCtx.drawImage(img, ann.x * sx, ann.y * sy, w * sx, h * sy, 0, 0, smallW, smallH);
+
+    // Step 2 — scale back up without smoothing to produce blocky pixels.
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return new Konva.Rect({ x: ann.x, y: ann.y, width: w, height: h, fill: 'rgba(180,180,200,0.5)', draggable: true });
+    }
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(small, 0, 0, smallW, smallH, 0, 0, w, h);
+
+    return new Konva.Image({
       x: ann.x,
       y: ann.y,
+      image: canvas,
       width: ann.width,
       height: ann.height,
-      fill: 'rgba(180,180,200,0.5)',
       draggable: true,
     });
   }
