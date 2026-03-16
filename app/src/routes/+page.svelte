@@ -615,17 +615,6 @@
 <svelte:window onkeydown={onKeyDown} />
 
 <div class="editor-window" data-theme="dark">
-  <div class="title-bar">
-    <div class="traffic-lights">
-      <span class="light close"></span>
-      <span class="light minimize"></span>
-      <span class="light maximize"></span>
-    </div>
-    <span class="title-text">
-      {currentFilename ? `SnapInk — ${currentFilename}` : 'SnapInk'}
-    </span>
-  </div>
-
   <div class="canvas-area">
     {#if appStore.captureImageData}
       <div class="canvas-wrapper" style={`width:${canvasWidth}px;height:${canvasHeight}px`}>
@@ -769,40 +758,6 @@
   position: relative;
 }
 
-.title-bar {
-  height: 28px;
-  background: #2C2C2E;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  flex-shrink: 0;
-  -webkit-app-region: drag;
-}
-
-.traffic-lights {
-  display: flex;
-  gap: 6px;
-  margin-right: 12px;
-  -webkit-app-region: no-drag;
-}
-
-.light {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.light.close { background: #FF5F57; }
-.light.minimize { background: #FEBC2E; }
-.light.maximize { background: #28C840; }
-
-.title-text {
-  flex: 1;
-  text-align: center;
-  font-size: 12px;
-  color: #A1A1A6;
-}
 
 .canvas-area {
   flex: 1;
