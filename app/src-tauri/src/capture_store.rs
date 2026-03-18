@@ -103,13 +103,10 @@ pub fn store_capture_result(store: tauri::State<'_, CaptureStore>, data: String)
 
 // ── ScrollCaptureStore commands ───────────────────────────────────────────────
 
-/// Capture the stored scroll region and append the frame.
-/// Skips the frame if it is identical to the previous one (user paused scrolling).
-/// Returns the current total frame count.
-#[tauri::command]
-pub fn scroll_capture_add_frame(
-    scroll_store: tauri::State<'_, ScrollCaptureStore>,
-) -> Result<usize, String> {
+/// Capture the stored scroll region and append one frame (shared logic).
+/// Skips the frame if identical to the previous one (deduplication).
+/// Returns the new total frame count.
+pub(crate) fn add_frame_to_store(scroll_store: &ScrollCaptureStore) -> Result<usize, String> {
     let region = scroll_store
         .region
         .lock()
@@ -121,7 +118,7 @@ pub fn scroll_capture_add_frame(
 
     let mut frames = scroll_store.frames.lock().unwrap();
 
-    // Skip duplicate frames (user paused scrolling).
+    // Skip duplicate frames (no scroll happened yet).
     if let Some(last) = frames.last() {
         if crate::stitch::is_duplicate(last, &frame_data) {
             return Ok(frames.len());
@@ -130,6 +127,14 @@ pub fn scroll_capture_add_frame(
 
     frames.push(frame_data);
     Ok(frames.len())
+}
+
+/// IPC command: capture one frame manually (kept for backwards compatibility).
+#[tauri::command]
+pub fn scroll_capture_add_frame(
+    scroll_store: tauri::State<'_, ScrollCaptureStore>,
+) -> Result<usize, String> {
+    add_frame_to_store(&scroll_store)
 }
 
 /// Stitch all captured frames and return the result as a base64-encoded PNG.

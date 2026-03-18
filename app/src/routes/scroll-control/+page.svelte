@@ -1,58 +1,54 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
-
-  const appWindow = getCurrentWindow();
+  import { listen } from '@tauri-apps/api/event';
 
   let frameCount = $state(0);
-  let status = $state<'capturing' | 'stitching' | 'error'>('capturing');
+  let status = $state<'scrolling' | 'stitching' | 'error'>('scrolling');
   let errorMsg = $state('');
+  let cancelled = false;
 
-  let captureInterval: ReturnType<typeof setInterval> | null = null;
+  let unlistenFrameAdded: (() => void) | null = null;
+  let unlistenDone: (() => void) | null = null;
 
-  onMount(() => {
-    // Begin capturing frames immediately.
-    startCapturing();
+  onMount(async () => {
+    unlistenFrameAdded = await listen<number>('scroll-frame-added', (e) => {
+      frameCount = e.payload;
+    });
+
+    unlistenDone = await listen<void>('scroll-capture-done', async () => {
+      if (!cancelled) await stitch();
+    });
+
+    try {
+      await invoke('start_auto_scroll_capture_cmd');
+    } catch (e) {
+      status = 'error';
+      errorMsg = String(e);
+    }
   });
 
   onDestroy(() => {
-    stopCapturing();
+    unlistenFrameAdded?.();
+    unlistenDone?.();
   });
 
-  function startCapturing() {
-    captureInterval = setInterval(async () => {
-      try {
-        const count = await invoke<number>('scroll_capture_add_frame');
-        frameCount = count;
-      } catch (e) {
-        console.error('Frame capture error:', e);
-      }
-    }, 400);
+  async function stop() {
+    // Signal the Rust loop to stop — it will emit scroll-capture-done
+    // which triggers stitch() via the listener above.
+    await invoke('stop_scroll_capture_cmd');
   }
 
-  function stopCapturing() {
-    if (captureInterval !== null) {
-      clearInterval(captureInterval);
-      captureInterval = null;
-    }
-  }
-
-  async function done() {
-    stopCapturing();
-
+  async function stitch() {
     if (frameCount < 1) {
       status = 'error';
-      errorMsg = 'Scroll the content first, then click Done.';
-      // Resume capturing so user can try again.
-      startCapturing();
+      errorMsg = 'No frames captured.';
       return;
     }
 
     status = 'stitching';
 
     try {
-      // Single frame: skip stitching, use it directly.
       const stitched = await invoke<string>('stitch_scroll_frames');
       await invoke('store_capture_result', { data: stitched });
       await invoke('open_editor_cmd');
@@ -62,25 +58,26 @@
       return;
     }
 
-    // Clean up state and close this window (reset also closes us).
+    // scroll_capture_reset also closes this window.
     await invoke('scroll_capture_reset');
   }
 
   async function cancel() {
-    stopCapturing();
+    cancelled = true;
+    await invoke('stop_scroll_capture_cmd');
     await invoke('scroll_capture_reset');
-    // scroll_capture_reset closes the scroll-control window via Rust.
   }
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && cancel()} />
 
 <div class="pill">
-  {#if status === 'capturing'}
+  {#if status === 'scrolling'}
     <span class="icon">↕</span>
     <span class="count">{frameCount} {frameCount === 1 ? 'frame' : 'frames'}</span>
+    <span class="hint">· Space to stop</span>
     <div class="divider"></div>
-    <button class="btn done" onclick={done}>Done</button>
+    <button class="btn stop" onclick={stop}>Stop</button>
     <button class="btn cancel" onclick={cancel}>✕</button>
   {:else if status === 'stitching'}
     <span class="icon">⏳</span>
@@ -117,7 +114,6 @@
     box-shadow: 0 4px 24px rgba(0,0,0,0.4);
     cursor: default;
     user-select: none;
-    /* Enable drag to reposition the window */
     -webkit-app-region: drag;
   }
 
@@ -132,6 +128,11 @@
     font-weight: 600;
     color: white;
     min-width: 52px;
+  }
+
+  .hint {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.4);
   }
 
   .label {
@@ -167,11 +168,11 @@
     -webkit-app-region: no-drag;
   }
 
-  .btn.done {
+  .btn.stop {
     color: #30D158;
   }
 
-  .btn.done:hover {
+  .btn.stop:hover {
     background: rgba(48, 209, 88, 0.15);
   }
 

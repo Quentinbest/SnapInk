@@ -3,9 +3,13 @@ mod capture_store;
 mod clipboard;
 mod export;
 mod pin;
+mod scroll;
 mod settings;
 mod stitch;
 mod types;
+
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use capture_store::{CaptureStore, ScrollCaptureStore};
 use tauri::{
@@ -133,7 +137,7 @@ fn open_scroll_control_window(app: &tauri::AppHandle, control_x: f64, control_y:
     let url = format!("/scroll-control?cx={}&cy={}", control_x as i32, control_y as i32);
     let _ = WebviewWindowBuilder::new(app, "scroll-control", WebviewUrl::App(url.into()))
         .title("Scroll Capture")
-        .inner_size(240.0, 68.0)
+        .inner_size(300.0, 68.0)
         .position(control_x, control_y)
         .decorations(false)
         .always_on_top(true)
@@ -192,6 +196,48 @@ fn start_scroll_capture_cmd(
     Ok(())
 }
 
+/// Start the auto-scroll capture loop.
+/// Posts CGEvent scroll events at a fixed interval, captures frames, and
+/// emits `scroll-frame-added` / `scroll-capture-done` to the frontend.
+/// Space key is registered as a global shortcut to stop the loop.
+#[tauri::command]
+fn start_auto_scroll_capture_cmd(
+    app: tauri::AppHandle,
+    scroll_stop: tauri::State<'_, scroll::ScrollStop>,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    // Reset stop flag for this new capture.
+    scroll_stop.0.store(false, Ordering::Relaxed);
+    let stop = scroll_stop.0.clone();
+
+    // Register Space to stop the loop.
+    let stop_for_shortcut = stop.clone();
+    app.global_shortcut()
+        .on_shortcut("Space", move |_app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                stop_for_shortcut.store(true, Ordering::Relaxed);
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    std::thread::spawn(move || {
+        scroll::run_capture_loop(app.clone(), stop, 300);
+        // Unregister Space after the loop exits.
+        let _ = app.global_shortcut().unregister("Space");
+    });
+
+    Ok(())
+}
+
+/// Signal the auto-scroll loop to stop (called by the Stop button in the UI).
+#[tauri::command]
+fn stop_scroll_capture_cmd(scroll_stop: tauri::State<'_, scroll::ScrollStop>) {
+    use std::sync::atomic::Ordering;
+    scroll_stop.0.store(true, Ordering::Relaxed);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -200,6 +246,7 @@ pub fn run() {
         )))
         .manage(CaptureStore::new())
         .manage(ScrollCaptureStore::new())
+        .manage(scroll::ScrollStop(Arc::new(AtomicBool::new(false))))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -332,6 +379,8 @@ pub fn run() {
             open_editor_cmd,
             open_settings_cmd,
             start_scroll_capture_cmd,
+            start_auto_scroll_capture_cmd,
+            stop_scroll_capture_cmd,
             pin::pin_image,
             pin::get_pin_image,
             pin::remove_pin_image,
