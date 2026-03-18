@@ -4,9 +4,10 @@ mod clipboard;
 mod export;
 mod pin;
 mod settings;
+mod stitch;
 mod types;
 
-use capture_store::CaptureStore;
+use capture_store::{CaptureStore, ScrollCaptureStore};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -70,7 +71,8 @@ fn open_capture_window(app: &tauri::AppHandle, mode: &str) {
 
         // Take the background screenshot BEFORE the capture window opens so
         // the overlay never appears in the frozen background image.
-        if mode == "area" || mode == "window" || mode == "screen" {
+        // Scrolling mode also needs a background so the overlay isn't a white screen.
+        if mode == "area" || mode == "window" || mode == "screen" || mode == "scrolling" {
             if let Some(store) = app.try_state::<CaptureStore>() {
                 match capture::take_screenshot_sync() {
                     Ok(data) => {
@@ -120,6 +122,26 @@ fn open_capture_window(app: &tauri::AppHandle, mode: &str) {
     });
 }
 
+/// Open the scroll capture control window (small floating pill).
+/// `control_x/y` are logical screen coordinates for the window position.
+fn open_scroll_control_window(app: &tauri::AppHandle, control_x: f64, control_y: f64) {
+    // Close any existing instance first.
+    if let Some(win) = app.get_webview_window("scroll-control") {
+        let _ = win.close();
+    }
+
+    let url = format!("/scroll-control?cx={}&cy={}", control_x as i32, control_y as i32);
+    let _ = WebviewWindowBuilder::new(app, "scroll-control", WebviewUrl::App(url.into()))
+        .title("Scroll Capture")
+        .inner_size(240.0, 68.0)
+        .position(control_x, control_y)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .build();
+}
+
 #[tauri::command]
 fn open_capture_cmd(app: tauri::AppHandle, mode: String) {
     open_capture_window(&app, &mode);
@@ -135,6 +157,41 @@ fn open_settings_cmd(app: tauri::AppHandle) {
     open_settings_window(&app);
 }
 
+/// Called by the capture overlay when the user clicks "Start Scrolling Capture".
+/// Stores the physical-pixel region in `ScrollCaptureStore`, closes the overlay,
+/// and opens the scroll control window positioned below the selected region.
+#[tauri::command]
+fn start_scroll_capture_cmd(
+    app: tauri::AppHandle,
+    scroll_store: tauri::State<'_, ScrollCaptureStore>,
+    // Physical pixel coords for xcap screen capture.
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    // Logical (CSS) pixel coords for window positioning.
+    logical_x: f64,
+    logical_y: f64,
+    logical_width: f64,
+    logical_height: f64,
+) -> Result<(), String> {
+    // Store the capture region and reset any previous frames.
+    *scroll_store.region.lock().unwrap() = Some(types::CaptureRegion { x, y, width, height });
+    scroll_store.frames.lock().unwrap().clear();
+
+    // Close the full-screen capture overlay.
+    if let Some(win) = app.get_webview_window("capture") {
+        let _ = win.close();
+    }
+
+    // Position the control window below the selected region, centered horizontally.
+    let control_x = logical_x + logical_width / 2.0 - 120.0;
+    let control_y = logical_y + logical_height + 16.0;
+    open_scroll_control_window(&app, control_x, control_y);
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -142,6 +199,7 @@ pub fn run() {
             std::collections::HashMap::new(),
         )))
         .manage(CaptureStore::new())
+        .manage(ScrollCaptureStore::new())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -262,6 +320,9 @@ pub fn run() {
             capture_store::crop_and_store,
             capture_store::consume_capture_result,
             capture_store::store_capture_result,
+            capture_store::scroll_capture_add_frame,
+            capture_store::scroll_capture_reset,
+            capture_store::stitch_scroll_frames,
             export::export_to_file,
             export::expand_filename,
             export::get_default_save_path,
@@ -270,11 +331,20 @@ pub fn run() {
             open_capture_cmd,
             open_editor_cmd,
             open_settings_cmd,
+            start_scroll_capture_cmd,
             pin::pin_image,
             pin::get_pin_image,
             pin::remove_pin_image,
             clipboard::read_clipboard_image,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // Keep the app alive as a menu bar agent even when all windows are closed.
+        // Without this handler, Tauri exits as soon as the last window is destroyed.
+        // In Tauri 2 the event handler is passed to App::run(), not Builder::run().
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                api.prevent_exit();
+            }
+        });
 }
