@@ -5,7 +5,7 @@ use xcap::{Monitor, Window};
 
 use crate::types::{CaptureRegion, MonitorInfo, WindowInfo};
 
-fn image_to_base64_png(img: &DynamicImage) -> Result<String, String> {
+pub(crate) fn image_to_base64_png(img: &DynamicImage) -> Result<String, String> {
     let mut buf = Cursor::new(Vec::new());
     img.write_to(&mut buf, ImageFormat::Png)
         .map_err(|e| e.to_string())?;
@@ -68,6 +68,29 @@ pub fn capture_region(region: CaptureRegion, monitor_index: usize) -> Result<Str
     let monitor = monitors
         .get(monitor_index)
         .ok_or("Monitor not found")?;
+    let img = monitor.capture_image().map_err(|e| e.to_string())?;
+    let dyn_img = DynamicImage::ImageRgba8(img);
+
+    let mx = monitor.x().unwrap_or_default();
+    let my = monitor.y().unwrap_or_default();
+    let rel_x = (region.x - mx).max(0) as u32;
+    let rel_y = (region.y - my).max(0) as u32;
+    let w = region.width.min(dyn_img.width().saturating_sub(rel_x));
+    let h = region.height.min(dyn_img.height().saturating_sub(rel_y));
+
+    if w == 0 || h == 0 {
+        return Err("Invalid region dimensions".to_string());
+    }
+
+    let cropped = dyn_img.crop_imm(rel_x, rel_y, w, h);
+    image_to_base64_png(&cropped)
+}
+
+/// Capture a specific physical-pixel region of the primary monitor.
+/// Suitable for calling from Rust code (not exposed as a Tauri command).
+pub fn capture_region_sync(region: &crate::types::CaptureRegion) -> Result<String, String> {
+    let monitors = Monitor::all().map_err(|e| e.to_string())?;
+    let monitor = monitors.first().ok_or("No monitor found")?;
     let img = monitor.capture_image().map_err(|e| e.to_string())?;
     let dyn_img = DynamicImage::ImageRgba8(img);
 
