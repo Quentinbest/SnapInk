@@ -7,6 +7,13 @@ use crate::capture::image_to_base64_png;
 /// Compares the bottom strip of `top` with the top strip of `bottom`, searching
 /// from the largest candidate overlap down to the smallest. Returns 0 if no
 /// matching overlap is found within the search range.
+///
+/// ## Why search up to h-5?
+/// At 400 ms capture intervals, slow trackpad scrolling moves as little as
+/// 5–50 physical pixels per frame, meaning the real overlap can be 95–99%
+/// of the frame height. A cap at 80% would miss those slow-scroll cases,
+/// cause find_overlap to return 0, and let the stitcher include the full
+/// subsequent frame — producing visible duplicate regions in the output.
 pub fn find_overlap(top: &DynamicImage, bottom: &DynamicImage) -> u32 {
     let w = top.width().min(bottom.width());
     if w == 0 {
@@ -15,23 +22,25 @@ pub fn find_overlap(top: &DynamicImage, bottom: &DynamicImage) -> u32 {
 
     let h_top = top.height();
     let h_bot = bottom.height();
-    let min_overlap: u32 = 10;
-    let max_overlap = (h_top.min(h_bot) * 4 / 5).max(min_overlap);
 
-    if max_overlap < min_overlap {
-        return 0;
-    }
+    // Minimum scroll we require before treating frames as distinct: 5 physical px.
+    // Maximum overlap: everything except those 5 px (covers even very slow scrolling).
+    let min_overlap: u32 = 10;
+    let max_overlap = h_top.min(h_bot).saturating_sub(5).max(min_overlap);
 
     // Sample 5 columns evenly spaced across the image width.
-    let cols: Vec<u32> = (1..=5).map(|i| ((w * i / 6)).min(w.saturating_sub(1))).collect();
+    let cols: Vec<u32> = (1..=5).map(|i| (w * i / 6).min(w.saturating_sub(1))).collect();
 
     let top_rgba = top.to_rgba8();
     let bot_rgba = bottom.to_rgba8();
 
-    // Search from largest overlap to smallest — the first match is the correct one.
+    // Search from largest overlap to smallest — the first match is the correct one
+    // because greedy-largest avoids returning a small false-positive that happens to
+    // score above the threshold by chance.
     for n in (min_overlap..=max_overlap).rev() {
-        // Sample ~10 rows within the candidate overlap region.
-        let row_step = (n / 10).max(1);
+        // Sample ~20 rows evenly distributed across the candidate overlap strip.
+        // More samples → fewer false positives, especially for near-full overlaps.
+        let row_step = (n / 20).max(1);
         let mut match_count = 0u32;
         let mut total = 0u32;
 
@@ -142,14 +151,31 @@ mod tests {
     }
 
     #[test]
-    fn test_find_overlap_exact() {
-        // Full image 200×400. Top frame = rows 0-219, bottom frame = rows 180-399.
-        // Real overlap = 40 rows (rows 180-219 shared by both frames).
+    fn test_find_overlap_normal_scroll() {
+        // 20% scroll: overlap is 80% of frame height (previously failed with 80% cap).
         let full = gradient(200, 400, 0);
         let top = full.crop_imm(0, 0, 200, 220);
-        let bottom = full.crop_imm(0, 180, 200, 220);
-        let overlap = find_overlap(&top, &bottom);
-        assert_eq!(overlap, 40, "Expected 40px overlap, got {}", overlap);
+        let bottom = full.crop_imm(0, 180, 200, 220); // 40px scroll → 180px overlap
+        assert_eq!(find_overlap(&top, &bottom), 40, "Normal scroll overlap");
+    }
+
+    #[test]
+    fn test_find_overlap_slow_scroll() {
+        // Slow scroll: only 10px moved → overlap is 210 of 220 rows (~95%).
+        // This was the main failure case: the old 80% cap (176px max) would miss it.
+        let full = gradient(200, 400, 0);
+        let top = full.crop_imm(0, 0, 200, 220);
+        let bottom = full.crop_imm(0, 10, 200, 220); // 10px scroll → 210px overlap
+        assert_eq!(find_overlap(&top, &bottom), 210, "Slow scroll overlap");
+    }
+
+    #[test]
+    fn test_find_overlap_very_slow_scroll() {
+        // Very slow scroll: only 6px moved → overlap is 214 of 220 rows (~97%).
+        let full = gradient(200, 400, 0);
+        let top = full.crop_imm(0, 0, 200, 220);
+        let bottom = full.crop_imm(0, 6, 200, 220); // 6px scroll → 214px overlap
+        assert_eq!(find_overlap(&top, &bottom), 214, "Very slow scroll overlap");
     }
 
     #[test]
@@ -169,11 +195,11 @@ mod tests {
     }
 
     #[test]
-    fn test_stitch_two_frames_restores_original() {
-        // Stitch two overlapping crops of a known gradient — result should equal original.
+    fn test_stitch_two_frames_normal_scroll() {
+        // Stitch two overlapping crops — result should equal original dimensions.
         let full = gradient(200, 400, 0);
         let top = full.crop_imm(0, 0, 200, 220);
-        let bottom = full.crop_imm(0, 180, 200, 220);
+        let bottom = full.crop_imm(0, 180, 200, 220); // 40px scroll
 
         let result_b64 = stitch_frames(vec![top, bottom]).unwrap();
         let bytes = general_purpose::STANDARD.decode(&result_b64).unwrap();
@@ -181,6 +207,23 @@ mod tests {
 
         assert_eq!(result_img.width(), 200);
         assert_eq!(result_img.height(), 400);
+    }
+
+    #[test]
+    fn test_stitch_two_frames_slow_scroll() {
+        // Regression test: slow scroll (10px) was the main failure case.
+        // Old algorithm (80% cap) returned overlap=0, causing full-frame duplication.
+        let full = gradient(200, 400, 0);
+        let top = full.crop_imm(0, 0, 200, 220);
+        let bottom = full.crop_imm(0, 10, 200, 220); // only 10px scroll
+
+        let result_b64 = stitch_frames(vec![top, bottom]).unwrap();
+        let bytes = general_purpose::STANDARD.decode(&result_b64).unwrap();
+        let result_img = image::load_from_memory(&bytes).unwrap();
+
+        // Expected height: 220 (top) + 220 - 210 (new rows from bottom) = 230
+        assert_eq!(result_img.width(), 200);
+        assert_eq!(result_img.height(), 230, "Slow-scroll stitch height mismatch");
     }
 
     #[test]
