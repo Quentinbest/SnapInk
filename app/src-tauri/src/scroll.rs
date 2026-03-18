@@ -64,8 +64,13 @@ fn post_scroll_down() {}
 ///   3. Captures a frame and emits `scroll-frame-added` with the new count.
 ///
 /// The loop exits when the stop flag is set. On exit it emits `scroll-capture-done`.
+/// Frame capture errors are forwarded to the frontend via `scroll-capture-error`.
 pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_ms: u64) {
     use crate::capture_store::ScrollCaptureStore;
+
+    // Confirm the loop is alive so the frontend can detect if the command succeeded
+    // but the loop never started (e.g., immediate panic).
+    let _ = app.emit("scroll-loop-started", ());
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -81,12 +86,24 @@ pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_m
             break;
         }
 
-        if let Some(scroll_store) = app.try_state::<ScrollCaptureStore>() {
-            match crate::capture_store::add_frame_to_store(&scroll_store) {
-                Ok(count) => {
-                    let _ = app.emit("scroll-frame-added", count as u32);
+        match app.try_state::<ScrollCaptureStore>() {
+            Some(scroll_store) => {
+                match crate::capture_store::add_frame_to_store(&scroll_store) {
+                    Ok(count) => {
+                        let _ = app.emit("scroll-frame-added", count as u32);
+                    }
+                    Err(e) => {
+                        eprintln!("scroll capture error: {e}");
+                        let _ = app.emit("scroll-capture-error", e);
+                        // Continue looping — transient errors (e.g. first frame) are common.
+                    }
                 }
-                Err(e) => eprintln!("scroll capture error: {e}"),
+            }
+            None => {
+                let msg = "Internal error: ScrollCaptureStore not found";
+                eprintln!("{msg}");
+                let _ = app.emit("scroll-capture-error", msg.to_string());
+                break;
             }
         }
     }

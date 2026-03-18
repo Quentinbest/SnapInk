@@ -204,13 +204,24 @@ fn start_scroll_capture_cmd(
 /// Posts CGEvent scroll events at a fixed interval, captures frames, and
 /// emits `scroll-frame-added` / `scroll-capture-done` to the frontend.
 /// Space key is registered as a global shortcut to stop the loop.
+///
+/// Marked `async` so `spawn_blocking` runs on Tauri's Tokio thread pool,
+/// which has the same execution context as regular IPC command handlers
+/// (where xcap screen capture is known to work correctly).
 #[tauri::command]
-fn start_auto_scroll_capture_cmd(
+async fn start_auto_scroll_capture_cmd(
     app: tauri::AppHandle,
     scroll_stop: tauri::State<'_, scroll::ScrollStop>,
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Unregister any stale Space shortcut left over from a previous session
+    // (e.g., if the session crashed before its cleanup code ran).
+    // Without this, each new session adds another handler that all share the
+    // same managed AtomicBool — any spurious Space event would fire all of
+    // them and set the stop flag prematurely.
+    let _ = app.global_shortcut().unregister("Space");
 
     // Reset stop flag for this new capture.
     scroll_stop.0.store(false, Ordering::Relaxed);
@@ -229,10 +240,14 @@ fn start_auto_scroll_capture_cmd(
         eprintln!("Space global shortcut unavailable (will use DOM fallback): {e}");
     }
 
-    std::thread::spawn(move || {
-        scroll::run_capture_loop(app.clone(), stop, 300);
+    // Run the capture loop on Tauri's blocking thread pool (Tokio spawn_blocking).
+    // This ensures the thread has the same runtime context as regular IPC command
+    // handlers, which is required for xcap's screen capture to work reliably.
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        scroll::run_capture_loop(app_clone.clone(), stop, 300);
         // Unregister Space after the loop exits.
-        let _ = app.global_shortcut().unregister("Space");
+        let _ = app_clone.global_shortcut().unregister("Space");
     });
 
     Ok(())
