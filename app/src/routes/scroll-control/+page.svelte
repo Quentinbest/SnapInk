@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
 
   let frameCount = $state(0);
   let status = $state<'scrolling' | 'stitching' | 'error'>('scrolling');
@@ -12,6 +13,9 @@
   let unlistenDone: (() => void) | null = null;
 
   onMount(async () => {
+    // Ensure the pill has keyboard focus so Space / Escape are delivered here.
+    await getCurrentWindow().setFocus();
+
     unlistenFrameAdded = await listen<number>('scroll-frame-added', (e) => {
       frameCount = e.payload;
     });
@@ -69,7 +73,10 @@
   }
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && cancel()} />
+<svelte:window onkeydown={(e) => {
+  if (e.key === 'Escape') { cancel(); }
+  if (e.key === ' ' && status === 'scrolling') { e.preventDefault(); stop(); }
+}} />
 
 <div class="pill">
   {#if status === 'scrolling'}

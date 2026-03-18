@@ -135,7 +135,7 @@ fn open_scroll_control_window(app: &tauri::AppHandle, control_x: f64, control_y:
     }
 
     let url = format!("/scroll-control?cx={}&cy={}", control_x as i32, control_y as i32);
-    let _ = WebviewWindowBuilder::new(app, "scroll-control", WebviewUrl::App(url.into()))
+    if let Ok(win) = WebviewWindowBuilder::new(app, "scroll-control", WebviewUrl::App(url.into()))
         .title("Scroll Capture")
         .inner_size(300.0, 68.0)
         .position(control_x, control_y)
@@ -143,7 +143,11 @@ fn open_scroll_control_window(app: &tauri::AppHandle, control_x: f64, control_y:
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .build();
+        .build()
+    {
+        // Focus the pill so DOM keyboard events (Space, Escape) are delivered to it.
+        let _ = win.set_focus();
+    }
 }
 
 #[tauri::command]
@@ -206,21 +210,24 @@ fn start_auto_scroll_capture_cmd(
     scroll_stop: tauri::State<'_, scroll::ScrollStop>,
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     // Reset stop flag for this new capture.
     scroll_stop.0.store(false, Ordering::Relaxed);
     let stop = scroll_stop.0.clone();
 
-    // Register Space to stop the loop.
+    // Best-effort: register Space as a global shortcut so it works even when
+    // the pill window loses focus. Failure is non-fatal — the DOM keyboard
+    // handler in the frontend covers the common case (pill window is focused).
     let stop_for_shortcut = stop.clone();
-    app.global_shortcut()
-        .on_shortcut("Space", move |_app, _shortcut, event| {
-            if event.state() == ShortcutState::Pressed {
-                stop_for_shortcut.store(true, Ordering::Relaxed);
-            }
-        })
-        .map_err(|e| e.to_string())?;
+    if let Err(e) = app.global_shortcut().on_shortcut(
+        "Space",
+        move |_app, _shortcut, _event| {
+            stop_for_shortcut.store(true, Ordering::Relaxed);
+        },
+    ) {
+        eprintln!("Space global shortcut unavailable (will use DOM fallback): {e}");
+    }
 
     std::thread::spawn(move || {
         scroll::run_capture_loop(app.clone(), stop, 300);
