@@ -1,5 +1,9 @@
 use std::sync::Mutex;
 
+use tauri::Manager;
+
+use crate::types::CaptureRegion;
+
 /// Holds state across the capture → editor flow.
 /// background: fullscreen screenshot taken BEFORE the overlay window opens.
 /// result: cropped region chosen by the user, ready for the editor.
@@ -16,6 +20,23 @@ impl CaptureStore {
         }
     }
 }
+
+/// Accumulates frames captured during a scroll-capture session.
+pub struct ScrollCaptureStore {
+    pub region: Mutex<Option<CaptureRegion>>,
+    pub frames: Mutex<Vec<String>>,
+}
+
+impl ScrollCaptureStore {
+    pub fn new() -> Self {
+        Self {
+            region: Mutex::new(None),
+            frames: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+// ── CaptureStore commands ─────────────────────────────────────────────────────
 
 /// Store a pre-taken fullscreen screenshot.
 #[tauri::command]
@@ -78,4 +99,75 @@ pub fn consume_capture_result(store: tauri::State<'_, CaptureStore>) -> Option<S
 #[tauri::command]
 pub fn store_capture_result(store: tauri::State<'_, CaptureStore>, data: String) {
     *store.result.lock().unwrap() = Some(data);
+}
+
+// ── ScrollCaptureStore commands ───────────────────────────────────────────────
+
+/// Capture the stored scroll region and append the frame.
+/// Skips the frame if it is identical to the previous one (user paused scrolling).
+/// Returns the current total frame count.
+#[tauri::command]
+pub fn scroll_capture_add_frame(
+    scroll_store: tauri::State<'_, ScrollCaptureStore>,
+) -> Result<usize, String> {
+    let region = scroll_store
+        .region
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("No scroll capture region set")?;
+
+    let frame_data = crate::capture::capture_region_sync(&region)?;
+
+    let mut frames = scroll_store.frames.lock().unwrap();
+
+    // Skip duplicate frames (user paused scrolling).
+    if let Some(last) = frames.last() {
+        if crate::stitch::is_duplicate(last, &frame_data) {
+            return Ok(frames.len());
+        }
+    }
+
+    frames.push(frame_data);
+    Ok(frames.len())
+}
+
+/// Stitch all captured frames and return the result as a base64-encoded PNG.
+#[tauri::command]
+pub fn stitch_scroll_frames(
+    scroll_store: tauri::State<'_, ScrollCaptureStore>,
+) -> Result<String, String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let frames_b64 = scroll_store.frames.lock().unwrap().clone();
+    if frames_b64.is_empty() {
+        return Err("No frames captured".to_string());
+    }
+
+    let frames: Result<Vec<image::DynamicImage>, String> = frames_b64
+        .iter()
+        .map(|b64| {
+            let bytes = general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| e.to_string())?;
+            image::load_from_memory(&bytes).map_err(|e| e.to_string())
+        })
+        .collect();
+
+    crate::stitch::stitch_frames(frames?)
+}
+
+/// Clear all scroll capture state (frames + region).
+/// Also closes the scroll-control window if open.
+#[tauri::command]
+pub fn scroll_capture_reset(
+    app: tauri::AppHandle,
+    scroll_store: tauri::State<'_, ScrollCaptureStore>,
+) {
+    scroll_store.frames.lock().unwrap().clear();
+    *scroll_store.region.lock().unwrap() = None;
+
+    if let Some(win) = app.get_webview_window("scroll-control") {
+        let _ = win.close();
+    }
 }
