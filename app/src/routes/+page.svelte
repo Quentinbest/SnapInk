@@ -242,6 +242,17 @@
 
     stage.on('mousemove', (e) => {
       lastMouseEvent = e.evt;
+
+      // Update cursor when in select mode: show move cursor over draggable annotations.
+      if (appStore.activeTool === 'select' && !isDrawing && engine) {
+        const target = e.target;
+        // Don't override cursor if over uiLayer (Konva manages resize-anchor cursors there).
+        if (target?.getLayer() !== engine.uiLayer) {
+          const overAnnotation = target && target !== stage && target.getLayer() === engine.annotationLayer;
+          container.style.cursor = overAnnotation ? 'move' : 'default';
+        }
+      }
+
       if (!isDrawing || !drawStart || !engine) return;
       const pos = stage.getPointerPosition();
       if (!pos) return;
@@ -409,6 +420,16 @@
       }
     });
 
+    // Hide resize/endpoint handles while an annotation is being dragged.
+    stage.on('dragstart', (e) => {
+      if (!engine) return;
+      const node = e.target;
+      if (!node || node.getLayer() !== engine.annotationLayer) return;
+      engine.transformer.visible(false);
+      if (engine.lineHandleGroup) engine.lineHandleGroup.visible(false);
+      engine.uiLayer.batchDraw();
+    });
+
     stage.on('mouseup', () => {
       if (!isDrawing || !drawStart || !engine) return;
       const pos = stage.getPointerPosition();
@@ -495,6 +516,15 @@
     appStore.setActiveColor(color);
     if (appStore.selectedAnnotationId) {
       appStore.updateAnnotation(appStore.selectedAnnotationId, { color });
+    }
+  }
+
+  // Set the stroke width AND update the currently selected annotation (if any).
+  function pickStrokeWidth(w: number) {
+    const clamped = Math.max(1, Math.min(20, w));
+    appStore.setStrokeWidth(clamped);
+    if (appStore.selectedAnnotationId) {
+      appStore.updateAnnotation(appStore.selectedAnnotationId, { strokeWidth: clamped });
     }
   }
 
@@ -637,6 +667,22 @@
         <button class="tool-btn" class:disabled={!appStore.canRedo} title="Redo (⌘⇧Z)" onclick={() => appStore.redo()}>
           {@html redoIcon()}
         </button>
+      </div>
+
+      <!-- Stroke width control -->
+      <div class="tool-group">
+        <button class="tool-btn stroke-adj" title="Decrease stroke width" onclick={() => pickStrokeWidth(appStore.strokeWidth - 1)}>−</button>
+        <input
+          type="number"
+          min="1"
+          max="20"
+          value={appStore.strokeWidth}
+          oninput={(e) => { const v = parseInt(e.currentTarget.value); if (!isNaN(v)) pickStrokeWidth(v); }}
+          onkeydown={(e) => e.stopPropagation()}
+          class="stroke-input"
+          title="Stroke width"
+        />
+        <button class="tool-btn stroke-adj" title="Increase stroke width" onclick={() => pickStrokeWidth(appStore.strokeWidth + 1)}>+</button>
       </div>
 
       <div class="toolbar-divider"></div>
@@ -850,6 +896,33 @@
 .arrow-style-btn :global(svg) {
   width: 24px;
   height: 8px;
+}
+
+.stroke-adj {
+  width: 22px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.stroke-input {
+  width: 28px;
+  background: transparent;
+  border: none;
+  color: #F5F5F7;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: center;
+  outline: none;
+  padding: 0;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.stroke-input::-webkit-inner-spin-button,
+.stroke-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .tool-btn:hover {

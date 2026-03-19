@@ -20,7 +20,7 @@ export class AnnotationEngine {
   transformer: Konva.Transformer;
 
   /** Draggable endpoint handles shown when a line/arrow is selected. */
-  private lineHandleGroup: Konva.Group | null = null;
+  lineHandleGroup: Konva.Group | null = null;
 
   /** Called when a line/arrow endpoint is dragged and released. */
   onLineEndpointMoved?: (id: string, x1: number, y1: number, x2: number, y2: number) => void;
@@ -65,6 +65,8 @@ export class AnnotationEngine {
   }
 
   renderAnnotations(annotations: Annotation[], selectedId: string | null) {
+    // Restore visibility in case it was hidden during a drag operation.
+    this.transformer.visible(true);
     this.annotationLayer.destroyChildren();
     for (const ann of annotations) {
       const node = this.createNode(ann);
