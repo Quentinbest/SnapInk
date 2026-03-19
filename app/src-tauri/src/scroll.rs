@@ -13,13 +13,20 @@ pub struct ScrollStop(pub Arc<AtomicBool>);
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
-    /// Create a scroll wheel event (non-variadic declaration for wheel_count=1).
-    /// Full C signature is variadic; we declare only the fixed args we use.
+    /// Create a scroll wheel event.
+    ///
+    /// CGEventCreateScrollWheelEvent2 is **non-variadic** (unlike the original
+    /// CGEventCreateScrollWheelEvent) and requires all 6 parameters:
+    ///   source, units, wheelCount, wheel1, wheel2, wheel3
+    /// Omitting wheel2/wheel3 causes undefined behaviour — the function reads
+    /// garbage from whatever happens to be in the argument registers.
     fn CGEventCreateScrollWheelEvent2(
         source: *const std::ffi::c_void, // CGEventSourceRef (null = hardware)
         units: u32,                      // kCGScrollEventUnitLine = 1
         wheel_count: u32,                // 1 = vertical only
         wheel1: i32,                     // negative = scroll down (content up)
+        wheel2: i32,                     // horizontal — 0 for none
+        wheel3: i32,                     // unused axis — 0
     ) -> *mut std::ffi::c_void;          // CGEventRef
 
     /// Post an event into the event stream.
@@ -43,6 +50,8 @@ fn post_scroll_down() {
             1,     // kCGScrollEventUnitLine
             1,     // wheelCount (vertical only)
             -3i32, // negative = scroll down (reveal content below)
+            0,     // wheel2 (horizontal) — no horizontal scroll
+            0,     // wheel3 — unused axis
         );
         if !event.is_null() {
             CGEventPost(0, event); // kCGHIDEventTap = 0
@@ -109,4 +118,46 @@ pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_m
     }
 
     let _ = app.emit("scroll-capture-done", ());
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "macos")]
+    use super::*;
+
+    /// Verify that the CGEventCreateScrollWheelEvent2 FFI declaration matches
+    /// the real C signature (6 arguments: source, units, wheelCount, wheel1,
+    /// wheel2, wheel3).  A previous bug omitted wheel2/wheel3 which caused
+    /// undefined behaviour and a NULL return on Apple Silicon.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_post_scroll_down_creates_valid_event() {
+        // Calling post_scroll_down should not panic or crash.
+        // We can't easily observe the scroll effect in a headless test, but we
+        // CAN verify the event is created (non-NULL) by calling the FFI
+        // directly with the corrected signature.
+        unsafe {
+            let event = CGEventCreateScrollWheelEvent2(
+                std::ptr::null(),
+                1,     // kCGScrollEventUnitLine
+                1,     // wheelCount
+                -1i32, // wheel1
+                0,     // wheel2
+                0,     // wheel3
+            );
+            assert!(
+                !event.is_null(),
+                "CGEventCreateScrollWheelEvent2 returned NULL — FFI signature mismatch?"
+            );
+            // Don't post the event in tests; just verify creation succeeded.
+            CFRelease(event as *const _);
+        }
+    }
+
+    /// Smoke-test: post_scroll_down() must not panic or segfault.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_post_scroll_down_no_crash() {
+        post_scroll_down();
+    }
 }
