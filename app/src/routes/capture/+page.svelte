@@ -74,7 +74,7 @@
 
   function onMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
-    if (overlayState === 'idle' && mode === 'area') {
+    if (overlayState === 'idle' && (mode === 'area' || mode === 'scrolling')) {
       dragStart = { x: e.clientX, y: e.clientY };
       overlayState = 'dragging';
       selection = { x: e.clientX, y: e.clientY, width: 0, height: 0 };
@@ -122,6 +122,28 @@
       console.error(e);
     }
     await appWindow.close();
+  }
+
+  /// Start a scrolling capture session: store the region in Rust,
+  /// close this overlay, and open the small scroll control window.
+  async function startScrollCapture() {
+    if (!selection || !monitors[0]) return;
+    const scale = monitors[0].scaleFactor;
+    try {
+      await invoke('start_scroll_capture_cmd', {
+        x: Math.round(selection.x * scale),
+        y: Math.round(selection.y * scale),
+        width: Math.round(selection.width * scale),
+        height: Math.round(selection.height * scale),
+        logicalX: selection.x,
+        logicalY: selection.y,
+        logicalWidth: selection.width,
+        logicalHeight: selection.height,
+      });
+      // Rust closes this window and opens the control window.
+    } catch (e) {
+      console.error('startScrollCapture failed:', e);
+    }
   }
 
   async function cancel() {
@@ -176,7 +198,7 @@
     <img class="bg-screenshot" src={`data:image/png;base64,${screenshotData}`} alt="" />
   {/if}
 
-  {#if mode === 'area'}
+  {#if mode === 'area' || mode === 'scrolling'}
     {#if !selection}
       <!-- Idle: full dim overlay -->
       <div class="dim-full"></div>
@@ -220,20 +242,36 @@
       <div class="coord-pill" style={`left:${cursor.x + 14}px;top:${cursor.y + 14}px`}>
         {cursor.x}, {cursor.y}
       </div>
-      <div class="instruction">Click and drag to select area</div>
+      {#if mode === 'scrolling'}
+        <div class="instruction">Select the scrollable content area</div>
+      {:else}
+        <div class="instruction">Click and drag to select area</div>
+      {/if}
     {/if}
 
     <!-- Action bar -->
     {#if overlayState === 'complete' && selection}
-      <div class="action-bar" style={actionBarStyle(selection)}>
-        <button class="action-btn primary" onclick={doCapture}>✂ Capture</button>
-        <div class="action-divider"></div>
-        <button class="action-btn secondary">📜 Scroll</button>
-        <button class="action-btn secondary">📌 Pin</button>
-        <div class="action-divider"></div>
-        <button class="action-btn danger" onclick={cancel}>✕</button>
-        <button class="action-btn success" onclick={doCapture}>✓</button>
-      </div>
+      {#if mode === 'scrolling'}
+        <!-- Scrolling mode: only show Start and Cancel -->
+        <div class="action-bar" style={actionBarStyle(selection)}>
+          <button class="action-btn scroll-start" onclick={startScrollCapture}>
+            ↕ Start Scrolling Capture
+          </button>
+          <div class="action-divider"></div>
+          <button class="action-btn danger" onclick={cancel}>✕</button>
+        </div>
+      {:else}
+        <!-- Area mode: standard capture buttons -->
+        <div class="action-bar" style={actionBarStyle(selection)}>
+          <button class="action-btn primary" onclick={doCapture}>✂ Capture</button>
+          <div class="action-divider"></div>
+          <button class="action-btn secondary" onclick={startScrollCapture}>↕ Scroll</button>
+          <button class="action-btn secondary">📌 Pin</button>
+          <div class="action-divider"></div>
+          <button class="action-btn danger" onclick={cancel}>✕</button>
+          <button class="action-btn success" onclick={doCapture}>✓</button>
+        </div>
+      {/if}
     {/if}
   {/if}
 
@@ -418,6 +456,15 @@
 
 .action-btn.primary:hover {
   background: #0066CC;
+}
+
+.action-btn.scroll-start {
+  background: #34C759;
+  color: white;
+}
+
+.action-btn.scroll-start:hover {
+  background: #28A745;
 }
 
 .action-btn.danger {
