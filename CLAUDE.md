@@ -26,7 +26,15 @@ npm run dev
 npm run build
 ```
 
-There are no test commands — only TypeScript checking via `svelte-check`.
+### Tests
+
+```bash
+# Rust unit tests (30 tests across ocr, stitch, scroll, capture_store)
+cd app/src-tauri && cargo test
+
+# Frontend type-check only (no unit test framework)
+npm run check
+```
 
 ## Architecture
 
@@ -40,7 +48,7 @@ System (tray icon, global shortcuts)
    Webview (SvelteKit SPA)
 ```
 
-The app runs as a single persistent process with multiple windows opened on demand. Windows share state through Tauri's managed state (`CaptureStore`, `PinStore`).
+The app runs as a single persistent process with multiple windows opened on demand. Windows share state through Tauri's managed state (`CaptureStore`, `ScrollCaptureStore`, `ScrollStop`, `PinStore`).
 
 ### Capture → Edit → Export Flow
 
@@ -51,11 +59,13 @@ The app runs as a single persistent process with multiple windows opened on dema
 5. Editor (`+page.svelte`) renders the image via **AnnotationEngine** (Konva.js canvas wrapper) and pushes annotations into `appStore`
 6. Save/copy/pin actions invoke Rust commands (`export_to_file`, clipboard plugin, `pin_image`)
 
-### IPC Commands (25 total, registered in `lib.rs`)
+### IPC Commands (28 total, registered in `lib.rs`)
 
 | Group | Commands |
 |---|---|
 | Capture | `get_monitors`, `get_windows`, `capture_fullscreen`, `capture_region`, `capture_window_by_id`, `get_capture_background`, `crop_and_store`, `store_capture_result`, `consume_capture_result` |
+| Scroll | `start_scroll_capture_cmd`, `start_auto_scroll_capture_cmd`, `stop_scroll_capture_cmd`, `scroll_capture_add_frame`, `stitch_scroll_frames`, `scroll_capture_reset` |
+| OCR | `recognize_text` |
 | Export | `export_to_file`, `expand_filename`, `get_default_save_path` |
 | Settings | `get_settings`, `save_settings` |
 | Window | `open_capture_cmd`, `open_editor_cmd`, `open_settings_cmd` |
@@ -72,6 +82,7 @@ Uses Svelte 5 runes (`$state`). Key fields: `annotations[]`, `activeTool`, `acti
 |---|---|
 | `/` | Main annotation editor (780×440 base) |
 | `/capture` | Full-screen overlay for region/window selection |
+| `/scroll-control` | Floating pill: frame counter, Stop, Cancel |
 | `/pin` | Floating always-on-top pin window |
 | `/settings` | 3-tab settings panel (General, Shortcuts, Output) |
 
@@ -80,8 +91,11 @@ Uses Svelte 5 runes (`$state`). Key fields: `annotations[]`, `activeTool`, `acti
 | File | Role |
 |---|---|
 | `lib.rs` | App orchestrator: tray menu, global shortcuts, all IPC command registration |
-| `capture.rs` | `xcap` wrapper → base64 PNG |
-| `capture_store.rs` | `CaptureStore { background, result }` — bridges capture overlay to editor |
+| `capture.rs` | `xcap` wrapper → base64 PNG; shared `crop_and_encode()` helper |
+| `capture_store.rs` | `CaptureStore` and `ScrollCaptureStore` — bridges capture/scroll to editor |
+| `scroll.rs` | Auto-scroll loop: CGEvent injection, frame capture, stop flag, 500-frame cap |
+| `stitch.rs` | Overlap detection and vertical frame stitching |
+| `ocr.rs` | macOS Vision OCR via `objc2-vision`; `recognize_text` IPC command |
 | `export.rs` | base64 → PNG/JPEG file write; `{YYYY}/{MM}/{DD}/{HH}/{mm}/{ss}` filename patterns |
 | `settings.rs` | JSON I/O to `$CONFIG_DIR/SnapInk/settings.json` |
 | `pin.rs` | `PinStore(HashMap<id, base64>)` for floating windows |
@@ -96,7 +110,6 @@ Uses Svelte 5 runes (`$state`). Key fields: `annotations[]`, `activeTool`, `acti
 
 ## Known Gaps (not yet implemented)
 
-- Scrolling/long-page capture (UI only, no Rust backend)
 - Hotkey recorder widget (settings shows hotkeys but can't rebind them interactively)
 - Code signing / notarization for macOS distribution
 

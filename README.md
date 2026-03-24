@@ -14,7 +14,7 @@ A macOS menu bar screenshot and annotation tool. Capture any region, window, or 
 | Screen | `Ctrl+Shift+3` | Full-screen capture, opens editor immediately |
 | Window | `Ctrl+Shift+5` | Click any window to capture it |
 | Scrolling | `Ctrl+Shift+6` | Select a region, auto-scrolls and stitches a long screenshot |
-| OCR | `Ctrl+Shift+7` | Select a region to recognize text *(UI only, not yet implemented)* |
+| OCR | `Ctrl+Shift+7` | Select a region, recognize text via macOS Vision, copy to clipboard |
 | Repeat Last | `Ctrl+Shift+R` | Repeat the previous capture |
 
 ### Annotation tools
@@ -227,6 +227,5 @@ Settings are stored at `~/Library/Application Support/SnapInk/settings.json`.
 
 ## Known gaps
 
-- **OCR** — UI entry point exists but the Vision framework integration is not yet implemented
 - **Hotkey recorder** — settings shows current bindings but cannot interactively rebind them
 - **Code signing / notarization** — not yet set up for distribution outside local development
