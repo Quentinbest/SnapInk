@@ -8,6 +8,12 @@ use tauri::{Emitter, Manager};
 /// commands can access the same flag.
 pub struct ScrollStop(pub Arc<AtomicBool>);
 
+/// Target point (logical screen coords) where scroll events are delivered.
+/// Set by `start_scroll_capture_cmd` to the center of the selected region.
+pub struct ScrollTarget(pub Mutex<Option<(f64, f64)>>);
+
+use std::sync::Mutex;
+
 // ── macOS CGEvent FFI ─────────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
@@ -32,6 +38,20 @@ extern "C" {
     /// Post an event into the event stream.
     /// kCGHIDEventTap = 0: hardware-level tap, delivers to window under cursor.
     fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
+
+    /// Set the location (in global display coordinates) where the event
+    /// will be delivered.  This makes the scroll event target a specific
+    /// screen point WITHOUT moving the user's cursor.
+    fn CGEventSetLocation(event: *mut std::ffi::c_void, point: CGPoint);
+}
+
+/// CGPoint equivalent for FFI.
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CGPoint {
+    pub x: f64,
+    pub y: f64,
 }
 
 #[cfg(target_os = "macos")]
@@ -40,10 +60,15 @@ extern "C" {
     fn CFRelease(cf: *const std::ffi::c_void);
 }
 
-/// Post a single scroll-down event (3 lines) to the window under the cursor.
+/// Post a single scroll-down event (3 lines) targeted at `target`.
+///
+/// `CGEventSetLocation` sets the delivery point in global display
+/// coordinates so the event reaches the window at that position
+/// WITHOUT moving the user's physical cursor.
+///
 /// No-op on non-macOS platforms.
 #[cfg(target_os = "macos")]
-fn post_scroll_down() {
+fn post_scroll_down(target: CGPoint) {
     unsafe {
         let event = CGEventCreateScrollWheelEvent2(
             std::ptr::null(),
@@ -54,6 +79,7 @@ fn post_scroll_down() {
             0,     // wheel3 — unused axis
         );
         if !event.is_null() {
+            CGEventSetLocation(event, target);
             CGEventPost(0, event); // kCGHIDEventTap = 0
             CFRelease(event as *const _);
         }
@@ -61,7 +87,7 @@ fn post_scroll_down() {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn post_scroll_down() {}
+fn post_scroll_down(_target: (f64, f64)) {}
 
 // ── Capture loop ──────────────────────────────────────────────────────────────
 
@@ -74,19 +100,24 @@ fn post_scroll_down() {}
 ///
 /// The loop exits when the stop flag is set. On exit it emits `scroll-capture-done`.
 /// Frame capture errors are forwarded to the frontend via `scroll-capture-error`.
-pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_ms: u64) {
+pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_ms: u64, target: (f64, f64)) {
     use crate::capture_store::ScrollCaptureStore;
 
     // Confirm the loop is alive so the frontend can detect if the command succeeded
     // but the loop never started (e.g., immediate panic).
     let _ = app.emit("scroll-loop-started", ());
 
+    #[cfg(target_os = "macos")]
+    let target_point = CGPoint { x: target.0, y: target.1 };
+    #[cfg(not(target_os = "macos"))]
+    let target_point = target;
+
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
 
-        post_scroll_down();
+        post_scroll_down(target_point);
 
         // Wait for the scroll animation to settle before capturing.
         std::thread::sleep(std::time::Duration::from_millis(interval_ms));
@@ -158,6 +189,25 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_post_scroll_down_no_crash() {
-        post_scroll_down();
+        // Target a point that's off-screen so the event has no visible effect.
+        post_scroll_down(CGPoint { x: 0.0, y: 0.0 });
+    }
+
+    /// Verify that CGEventSetLocation is accepted by the event.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_post_scroll_down_with_target_location() {
+        // Simulate targeting the center of a capture region at (500, 400).
+        let target = CGPoint { x: 500.0, y: 400.0 };
+        unsafe {
+            let event = CGEventCreateScrollWheelEvent2(
+                std::ptr::null(),
+                1, 1, -1i32, 0, 0,
+            );
+            assert!(!event.is_null());
+            CGEventSetLocation(event, target);
+            // Don't post — just verify the call chain doesn't crash.
+            CFRelease(event as *const _);
+        }
     }
 }

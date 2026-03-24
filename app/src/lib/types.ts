@@ -70,7 +70,7 @@ export interface Settings {
 
 export type CaptureMode = 'area' | 'screen' | 'window' | 'scrolling' | 'ocr' | 'repeat';
 
-export type OverlayState = 'idle' | 'dragging' | 'complete';
+export type OverlayState = 'idle' | 'dragging' | 'complete' | 'processing';
 
 export type ToolType =
   | 'select'

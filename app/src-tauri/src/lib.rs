@@ -2,6 +2,7 @@ mod capture;
 mod capture_store;
 mod clipboard;
 mod export;
+mod ocr;
 mod pin;
 mod scroll;
 mod settings;
@@ -76,7 +77,7 @@ fn open_capture_window(app: &tauri::AppHandle, mode: &str) {
         // Take the background screenshot BEFORE the capture window opens so
         // the overlay never appears in the frozen background image.
         // Scrolling mode also needs a background so the overlay isn't a white screen.
-        if mode == "area" || mode == "window" || mode == "screen" || mode == "scrolling" {
+        if mode == "area" || mode == "window" || mode == "screen" || mode == "scrolling" || mode == "ocr" {
             if let Some(store) = app.try_state::<CaptureStore>() {
                 match capture::take_screenshot_sync() {
                     Ok(data) => {
@@ -187,6 +188,14 @@ fn start_scroll_capture_cmd(
     *scroll_store.region.lock().unwrap() = Some(types::CaptureRegion { x, y, width, height });
     scroll_store.frames.lock().unwrap().clear();
 
+    // Store the logical center of the region so CGEvent scroll events
+    // are targeted at the correct window (not wherever the cursor is).
+    if let Some(scroll_target) = app.try_state::<scroll::ScrollTarget>() {
+        let center_x = logical_x + logical_width / 2.0;
+        let center_y = logical_y + logical_height / 2.0;
+        *scroll_target.0.lock().unwrap() = Some((center_x, center_y));
+    }
+
     // Close the full-screen capture overlay.
     if let Some(win) = app.get_webview_window("capture") {
         let _ = win.close();
@@ -208,9 +217,14 @@ fn start_scroll_capture_cmd(
 fn start_auto_scroll_capture_cmd(
     app: tauri::AppHandle,
     scroll_stop: tauri::State<'_, scroll::ScrollStop>,
+    scroll_target: tauri::State<'_, scroll::ScrollTarget>,
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Read the scroll target (logical center of the capture region).
+    let target = scroll_target.0.lock().unwrap()
+        .ok_or("No scroll target set — call start_scroll_capture_cmd first")?;
 
     // Unregister any stale Space shortcut left over from a previous session
     // (e.g., if the session crashed before its cleanup code ran).
@@ -234,7 +248,7 @@ fn start_auto_scroll_capture_cmd(
     }
 
     std::thread::spawn(move || {
-        scroll::run_capture_loop(app.clone(), stop, 300);
+        scroll::run_capture_loop(app.clone(), stop, 300, target);
         // Unregister Space after the loop exits.
         let _ = app.global_shortcut().unregister("Space");
     });
@@ -258,6 +272,7 @@ pub fn run() {
         .manage(CaptureStore::new())
         .manage(ScrollCaptureStore::new())
         .manage(scroll::ScrollStop(Arc::new(AtomicBool::new(false))))
+        .manage(scroll::ScrollTarget(std::sync::Mutex::new(None)))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -396,6 +411,7 @@ pub fn run() {
             pin::get_pin_image,
             pin::remove_pin_image,
             clipboard::read_clipboard_image,
+            ocr::recognize_text,
         ])
         // Keep the app alive as a menu bar agent even when all windows are closed.
         // Without this handler, Tauri exits as soon as the last window is destroyed.

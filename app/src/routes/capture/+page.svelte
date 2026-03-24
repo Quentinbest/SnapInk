@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import type { CaptureMode, OverlayState, MonitorInfo, WindowInfo, Point } from '$lib/types';
 
   type SelectionRect = { x: number; y: number; width: number; height: number };
@@ -74,7 +75,7 @@
 
   function onMouseDown(e: MouseEvent) {
     if (e.button !== 0) return;
-    if (overlayState === 'idle' && (mode === 'area' || mode === 'scrolling')) {
+    if (overlayState === 'idle' && (mode === 'area' || mode === 'scrolling' || mode === 'ocr')) {
       dragStart = { x: e.clientX, y: e.clientY };
       overlayState = 'dragging';
       selection = { x: e.clientX, y: e.clientY, width: 0, height: 0 };
@@ -87,12 +88,44 @@
   function onMouseUp(e: MouseEvent) {
     if (overlayState === 'dragging') {
       if (selection && selection.width > 4 && selection.height > 4) {
-        overlayState = 'complete';
+        if (mode === 'ocr') {
+          doOcr();
+        } else {
+          overlayState = 'complete';
+        }
       } else {
         overlayState = 'idle';
         dragStart = null;
         selection = null;
       }
+    }
+  }
+
+  async function doOcr() {
+    if (!selection || !monitors[0]) return;
+    const scale = monitors[0].scaleFactor;
+    overlayState = 'processing';
+    try {
+      const cropped = await invoke<string>('crop_and_store', {
+        x: Math.round(selection.x * scale),
+        y: Math.round(selection.y * scale),
+        width: Math.round(selection.width * scale),
+        height: Math.round(selection.height * scale),
+      });
+      // Clean up the store — OCR doesn't need the persisted result.
+      invoke('consume_capture_result').catch(() => {});
+      const text = await invoke<string>('recognize_text', { imageBase64: cropped });
+      await writeText(text);
+      // TODO: show toast "Text copied! " + text.slice(0, 40)
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes('NO_TEXT')) {
+        console.warn('OCR: no text found in selected region');
+      } else {
+        console.error('OCR failed:', e);
+      }
+    } finally {
+      appWindow.close().catch(() => {});
     }
   }
 
@@ -198,7 +231,7 @@
     <img class="bg-screenshot" src={`data:image/png;base64,${screenshotData}`} alt="" />
   {/if}
 
-  {#if mode === 'area' || mode === 'scrolling'}
+  {#if mode === 'area' || mode === 'scrolling' || mode === 'ocr'}
     {#if !selection}
       <!-- Idle: full dim overlay -->
       <div class="dim-full"></div>
@@ -213,7 +246,7 @@
       <div
         class="selection-rect"
         class:dashed={overlayState === 'dragging'}
-        class:solid={overlayState === 'complete'}
+        class:solid={overlayState === 'complete' || overlayState === 'processing'}
         style={selectionStyle(selection)}
       >
         {#if overlayState === 'complete'}
@@ -234,6 +267,13 @@
       </div>
     {/if}
 
+    <!-- Processing spinner (OCR mode) -->
+    {#if overlayState === 'processing' && selection}
+      <div class="processing-pill" style={actionBarStyle(selection)}>
+        ⏳ Recognizing text…
+      </div>
+    {/if}
+
     <!-- Crosshair -->
     {#if overlayState === 'idle'}
       <div class="crosshair-h" style={`top:${cursor.y}px`}></div>
@@ -244,6 +284,8 @@
       </div>
       {#if mode === 'scrolling'}
         <div class="instruction">Select the scrollable content area</div>
+      {:else if mode === 'ocr'}
+        <div class="instruction">Drag to select text region</div>
       {:else}
         <div class="instruction">Click and drag to select area</div>
       {/if}
@@ -417,6 +459,17 @@
   transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.5);
   font-size: 12px;
+  pointer-events: none;
+}
+
+.processing-pill {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.82);
+  color: white;
+  font-size: 13px;
+  padding: 6px 16px;
+  border-radius: 9999px;
+  white-space: nowrap;
   pointer-events: none;
 }
 

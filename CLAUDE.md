@@ -97,7 +97,6 @@ Uses Svelte 5 runes (`$state`). Key fields: `annotations[]`, `activeTool`, `acti
 ## Known Gaps (not yet implemented)
 
 - Scrolling/long-page capture (UI only, no Rust backend)
-- OCR (requires macOS Vision framework)
 - Hotkey recorder widget (settings shows hotkeys but can't rebind them interactively)
 - Code signing / notarization for macOS distribution
 
