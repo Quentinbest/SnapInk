@@ -222,6 +222,14 @@ fn start_auto_scroll_capture_cmd(
     use std::sync::atomic::Ordering;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
+    // Verify accessibility permission — CGEventPost silently drops events without it.
+    if !scroll::is_accessibility_trusted() {
+        return Err(
+            "Accessibility permission required. Grant access in System Settings → Privacy & Security → Accessibility."
+                .to_string(),
+        );
+    }
+
     // Read the scroll target (logical center of the capture region).
     let target = scroll_store.scroll_target.lock().unwrap()
         .ok_or("No scroll target set — call start_scroll_capture_cmd first")?;
@@ -411,6 +419,7 @@ pub fn run() {
             pin::remove_pin_image,
             clipboard::read_clipboard_image,
             ocr::recognize_text,
+            ocr::get_supported_ocr_languages,
         ])
         // Keep the app alive as a menu bar agent even when all windows are closed.
         // Without this handler, Tauri exits as soon as the last window is destroyed.
