@@ -46,13 +46,13 @@ pub fn recognize_text_in_base64_image(base64_png: &str) -> Result<String, String
         return Err("NO_TEXT".to_string());
     }
 
-    // 2. Validate PNG magic bytes so we return a meaningful error before
+    // 3. Validate PNG magic bytes so we return a meaningful error before
     //    calling into Vision with garbage data.
     if bytes.len() < 8 || bytes[0..8] != *b"\x89PNG\r\n\x1a\n" {
         return Err("not a PNG".to_string());
     }
 
-    // 3. Vision FFI — objc2 0.6 wraps unsafety internally.
+    // 4. Vision FFI — objc2 0.6 wraps unsafety internally.
     // NSData takes ownership of the bytes (copies internally).
     let ns_data = NSData::from_vec(bytes);
 
@@ -91,13 +91,12 @@ pub fn recognize_text_in_base64_image(base64_png: &str) -> Result<String, String
     let mut lines: Vec<String> = Vec::new();
     for obs in &*observations {
         let candidates = obs.topCandidates(1);
-        for candidate in &*candidates {
+        if let Some(candidate) = candidates.iter().next() {
             let s = candidate.string().to_string();
             let trimmed = s.trim().to_string();
             if !trimmed.is_empty() {
                 lines.push(trimmed);
             }
-            break; // topCandidates(1) — only ever one
         }
     }
 
@@ -138,6 +137,21 @@ mod tests {
     fn test_non_png_bytes_returns_error() {
         let b64 = general_purpose::STANDARD.encode(b"not a png at all");
         let result = recognize_text_in_base64_image(&b64);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_oversized_input_returns_error() {
+        // 67 million + 1 bytes of base64 should be rejected before decoding.
+        let huge = "A".repeat(67_000_001);
+        let result = recognize_text_in_base64_image(&huge);
+        assert_eq!(result, Err("Image too large for OCR".to_string()));
+    }
+
+    #[test]
+    fn test_empty_base64_returns_no_text() {
+        // Empty string decodes to zero bytes → should return NO_TEXT (not crash).
+        let result = recognize_text_in_base64_image("");
         assert!(result.is_err());
     }
 

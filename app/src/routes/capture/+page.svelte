@@ -16,6 +16,7 @@
   let monitors = $state<MonitorInfo[]>([]);
   let windows = $state<WindowInfo[]>([]);
   let hoveredWindowId = $state<number | null>(null);
+  let ocrToast = $state<string | null>(null);
 
   const appWindow = getCurrentWindow();
 
@@ -116,11 +117,14 @@
       invoke('consume_capture_result').catch(() => {});
       const text = await invoke<string>('recognize_text', { imageBase64: cropped });
       await writeText(text);
-      // TODO: show toast "Text copied! " + text.slice(0, 40)
+      const preview = text.length > 40 ? text.slice(0, 40) + '…' : text;
+      ocrToast = `✓ Copied: ${preview}`;
+      await new Promise((r) => setTimeout(r, 1200));
     } catch (e) {
       const msg = String(e);
       if (msg.includes('NO_TEXT')) {
-        console.warn('OCR: no text found in selected region');
+        ocrToast = 'No text found in selected region';
+        await new Promise((r) => setTimeout(r, 1200));
       } else {
         console.error('OCR failed:', e);
       }
@@ -267,10 +271,14 @@
       </div>
     {/if}
 
-    <!-- Processing spinner (OCR mode) -->
+    <!-- Processing spinner / toast (OCR mode) -->
     {#if overlayState === 'processing' && selection}
       <div class="processing-pill" style={actionBarStyle(selection)}>
-        ⏳ Recognizing text…
+        {#if ocrToast}
+          {ocrToast}
+        {:else}
+          ⏳ Recognizing text…
+        {/if}
       </div>
     {/if}
 

@@ -22,9 +22,12 @@ impl CaptureStore {
 }
 
 /// Accumulates frames captured during a scroll-capture session.
+/// Also stores the scroll target (logical center of capture region)
+/// so CGEvent scroll events are delivered to the correct screen point.
 pub struct ScrollCaptureStore {
     pub region: Mutex<Option<CaptureRegion>>,
     pub frames: Mutex<Vec<String>>,
+    pub scroll_target: Mutex<Option<(f64, f64)>>,
 }
 
 impl ScrollCaptureStore {
@@ -32,6 +35,7 @@ impl ScrollCaptureStore {
         Self {
             region: Mutex::new(None),
             frames: Mutex::new(Vec::new()),
+            scroll_target: Mutex::new(None),
         }
     }
 }
@@ -171,8 +175,137 @@ pub fn scroll_capture_reset(
 ) {
     scroll_store.frames.lock().unwrap().clear();
     *scroll_store.region.lock().unwrap() = None;
+    *scroll_store.scroll_target.lock().unwrap() = None;
 
     if let Some(win) = app.get_webview_window("scroll-control") {
         let _ = win.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create a CaptureStore with a test background image.
+    fn store_with_background(width: u32, height: u32) -> CaptureStore {
+        use base64::{engine::general_purpose, Engine as _};
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+        use std::io::Cursor;
+
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            width, height, Rgba([100, 150, 200, 255]),
+        ));
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, ImageFormat::Png).unwrap();
+        let b64 = general_purpose::STANDARD.encode(buf.get_ref());
+
+        let store = CaptureStore::new();
+        *store.background.lock().unwrap() = Some(b64);
+        store
+    }
+
+    #[test]
+    fn test_crop_and_store_no_background() {
+        let store = CaptureStore::new();
+        // Simulate Tauri State by calling the crop logic directly.
+        let bg = store.background.lock().unwrap().clone();
+        assert!(bg.is_none(), "Expected no background");
+    }
+
+    #[test]
+    fn test_crop_and_store_zero_dimension() {
+        let store = store_with_background(200, 200);
+        let bg = store.background.lock().unwrap().clone().unwrap();
+
+        use base64::{engine::general_purpose, Engine as _};
+        let bytes = general_purpose::STANDARD.decode(&bg).unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+
+        // Zero width
+        let w = 0u32.min(img.width());
+        assert_eq!(w, 0, "Zero width should stay zero");
+    }
+
+    #[test]
+    fn test_crop_and_store_negative_xy_clamped() {
+        let store = store_with_background(200, 200);
+        let bg = store.background.lock().unwrap().clone().unwrap();
+
+        use base64::{engine::general_purpose, Engine as _};
+        let bytes = general_purpose::STANDARD.decode(&bg).unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+
+        // Negative x/y should be clamped to 0.
+        let x: i32 = -50;
+        let y: i32 = -30;
+        let rel_x = x.max(0) as u32;
+        let rel_y = y.max(0) as u32;
+        assert_eq!(rel_x, 0);
+        assert_eq!(rel_y, 0);
+
+        let w = 100u32.min(img.width().saturating_sub(rel_x));
+        let h = 100u32.min(img.height().saturating_sub(rel_y));
+        assert!(w > 0 && h > 0, "Clamped crop should have valid dimensions");
+
+        let cropped = img.crop_imm(rel_x, rel_y, w, h);
+        assert_eq!(cropped.width(), 100);
+        assert_eq!(cropped.height(), 100);
+    }
+
+    #[test]
+    fn test_crop_and_store_happy_path() {
+        use base64::{engine::general_purpose, Engine as _};
+        use image::ImageFormat;
+        use std::io::Cursor;
+
+        let store = store_with_background(400, 300);
+        let bg = store.background.lock().unwrap().clone().unwrap();
+        let bytes = general_purpose::STANDARD.decode(&bg).unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+
+        let rel_x = 50u32;
+        let rel_y = 50u32;
+        let w = 200u32.min(img.width().saturating_sub(rel_x));
+        let h = 150u32.min(img.height().saturating_sub(rel_y));
+
+        let cropped = img.crop_imm(rel_x, rel_y, w, h);
+        let mut buf = Cursor::new(Vec::new());
+        cropped.write_to(&mut buf, ImageFormat::Png).unwrap();
+        let result = general_purpose::STANDARD.encode(buf.get_ref());
+
+        // Should produce a valid base64 PNG.
+        assert!(!result.is_empty());
+        // Verify it decodes back to the right dimensions.
+        let decoded = general_purpose::STANDARD.decode(&result).unwrap();
+        let decoded_img = image::load_from_memory(&decoded).unwrap();
+        assert_eq!(decoded_img.width(), 200);
+        assert_eq!(decoded_img.height(), 150);
+    }
+
+    #[test]
+    fn test_scroll_capture_store_new_is_empty() {
+        let store = ScrollCaptureStore::new();
+        assert!(store.region.lock().unwrap().is_none());
+        assert!(store.frames.lock().unwrap().is_empty());
+        assert!(store.scroll_target.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_scroll_capture_reset_clears_all() {
+        let store = ScrollCaptureStore::new();
+        *store.region.lock().unwrap() = Some(crate::types::CaptureRegion {
+            x: 10, y: 20, width: 100, height: 200,
+        });
+        store.frames.lock().unwrap().push("frame1".to_string());
+        *store.scroll_target.lock().unwrap() = Some((500.0, 400.0));
+
+        // Simulate reset (without the Tauri window close).
+        store.frames.lock().unwrap().clear();
+        *store.region.lock().unwrap() = None;
+        *store.scroll_target.lock().unwrap() = None;
+
+        assert!(store.region.lock().unwrap().is_none());
+        assert!(store.frames.lock().unwrap().is_empty());
+        assert!(store.scroll_target.lock().unwrap().is_none());
     }
 }

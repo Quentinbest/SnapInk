@@ -5,6 +5,27 @@ use xcap::{Monitor, Window};
 
 use crate::types::{CaptureRegion, MonitorInfo, WindowInfo};
 
+/// Crop a region from a full-screen image and return as base64-encoded PNG.
+/// Shared by `capture_region` (IPC) and `capture_region_sync` (internal).
+fn crop_and_encode(
+    img: &DynamicImage,
+    monitor_x: i32,
+    monitor_y: i32,
+    region: &CaptureRegion,
+) -> Result<String, String> {
+    let rel_x = (region.x - monitor_x).max(0) as u32;
+    let rel_y = (region.y - monitor_y).max(0) as u32;
+    let w = region.width.min(img.width().saturating_sub(rel_x));
+    let h = region.height.min(img.height().saturating_sub(rel_y));
+
+    if w == 0 || h == 0 {
+        return Err("Invalid region dimensions".to_string());
+    }
+
+    let cropped = img.crop_imm(rel_x, rel_y, w, h);
+    image_to_base64_png(&cropped)
+}
+
 pub(crate) fn image_to_base64_png(img: &DynamicImage) -> Result<String, String> {
     let mut buf = Cursor::new(Vec::new());
     img.write_to(&mut buf, ImageFormat::Png)
@@ -70,20 +91,9 @@ pub fn capture_region(region: CaptureRegion, monitor_index: usize) -> Result<Str
         .ok_or("Monitor not found")?;
     let img = monitor.capture_image().map_err(|e| e.to_string())?;
     let dyn_img = DynamicImage::ImageRgba8(img);
-
     let mx = monitor.x().unwrap_or_default();
     let my = monitor.y().unwrap_or_default();
-    let rel_x = (region.x - mx).max(0) as u32;
-    let rel_y = (region.y - my).max(0) as u32;
-    let w = region.width.min(dyn_img.width().saturating_sub(rel_x));
-    let h = region.height.min(dyn_img.height().saturating_sub(rel_y));
-
-    if w == 0 || h == 0 {
-        return Err("Invalid region dimensions".to_string());
-    }
-
-    let cropped = dyn_img.crop_imm(rel_x, rel_y, w, h);
-    image_to_base64_png(&cropped)
+    crop_and_encode(&dyn_img, mx, my, &region)
 }
 
 /// Capture a specific physical-pixel region of the primary monitor.
@@ -93,20 +103,9 @@ pub fn capture_region_sync(region: &crate::types::CaptureRegion) -> Result<Strin
     let monitor = monitors.first().ok_or("No monitor found")?;
     let img = monitor.capture_image().map_err(|e| e.to_string())?;
     let dyn_img = DynamicImage::ImageRgba8(img);
-
     let mx = monitor.x().unwrap_or_default();
     let my = monitor.y().unwrap_or_default();
-    let rel_x = (region.x - mx).max(0) as u32;
-    let rel_y = (region.y - my).max(0) as u32;
-    let w = region.width.min(dyn_img.width().saturating_sub(rel_x));
-    let h = region.height.min(dyn_img.height().saturating_sub(rel_y));
-
-    if w == 0 || h == 0 {
-        return Err("Invalid region dimensions".to_string());
-    }
-
-    let cropped = dyn_img.crop_imm(rel_x, rel_y, w, h);
-    image_to_base64_png(&cropped)
+    crop_and_encode(&dyn_img, mx, my, region)
 }
 
 pub fn take_screenshot_sync() -> Result<String, String> {

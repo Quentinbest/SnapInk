@@ -190,10 +190,10 @@ fn start_scroll_capture_cmd(
 
     // Store the logical center of the region so CGEvent scroll events
     // are targeted at the correct window (not wherever the cursor is).
-    if let Some(scroll_target) = app.try_state::<scroll::ScrollTarget>() {
+    {
         let center_x = logical_x + logical_width / 2.0;
         let center_y = logical_y + logical_height / 2.0;
-        *scroll_target.0.lock().unwrap() = Some((center_x, center_y));
+        *scroll_store.scroll_target.lock().unwrap() = Some((center_x, center_y));
     }
 
     // Close the full-screen capture overlay.
@@ -217,13 +217,13 @@ fn start_scroll_capture_cmd(
 fn start_auto_scroll_capture_cmd(
     app: tauri::AppHandle,
     scroll_stop: tauri::State<'_, scroll::ScrollStop>,
-    scroll_target: tauri::State<'_, scroll::ScrollTarget>,
+    scroll_store: tauri::State<'_, ScrollCaptureStore>,
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     // Read the scroll target (logical center of the capture region).
-    let target = scroll_target.0.lock().unwrap()
+    let target = scroll_store.scroll_target.lock().unwrap()
         .ok_or("No scroll target set — call start_scroll_capture_cmd first")?;
 
     // Unregister any stale Space shortcut left over from a previous session
@@ -272,7 +272,6 @@ pub fn run() {
         .manage(CaptureStore::new())
         .manage(ScrollCaptureStore::new())
         .manage(scroll::ScrollStop(Arc::new(AtomicBool::new(false))))
-        .manage(scroll::ScrollTarget(std::sync::Mutex::new(None)))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())

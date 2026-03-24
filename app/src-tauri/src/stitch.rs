@@ -250,4 +250,53 @@ mod tests {
         let b = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVQI12P4z8BQDwAEgAF/QualIQAAAABJRU5ErkJggg==";
         assert!(!is_duplicate(a, b));
     }
+
+    #[test]
+    fn test_is_duplicate_short_strings() {
+        // Strings shorter than 1200 bytes: prefix_len should be clamped to the shorter length.
+        let short = "ABCDEF";
+        assert!(is_duplicate(short, short));
+        assert!(!is_duplicate("ABCDEF", "ABCDEG"));
+    }
+
+    #[test]
+    fn test_is_duplicate_empty_strings() {
+        // Two empty strings: prefix of length 0 means they match.
+        assert!(is_duplicate("", ""));
+    }
+
+    #[test]
+    fn test_stitch_three_frames() {
+        // Three overlapping frames: verifies cumulative overlap detection.
+        let full = gradient(200, 600, 0);
+        let f1 = full.crop_imm(0, 0, 200, 220);
+        let f2 = full.crop_imm(0, 180, 200, 220); // 40px scroll
+        let f3 = full.crop_imm(0, 360, 200, 220); // 40px scroll
+
+        let result_b64 = stitch_frames(vec![f1, f2, f3]).unwrap();
+        let bytes = general_purpose::STANDARD.decode(&result_b64).unwrap();
+        let result_img = image::load_from_memory(&bytes).unwrap();
+
+        assert_eq!(result_img.width(), 200);
+        // 220 + (220-40) + (220-40) = 580
+        assert_eq!(result_img.height(), 580, "Three-frame stitch height mismatch");
+    }
+
+    #[test]
+    fn test_stitch_four_frames_slow_scroll() {
+        // Four frames with slow scroll (10px each).
+        let full = gradient(200, 300, 0);
+        let f1 = full.crop_imm(0, 0, 200, 100);
+        let f2 = full.crop_imm(0, 10, 200, 100);
+        let f3 = full.crop_imm(0, 20, 200, 100);
+        let f4 = full.crop_imm(0, 30, 200, 100);
+
+        let result_b64 = stitch_frames(vec![f1, f2, f3, f4]).unwrap();
+        let bytes = general_purpose::STANDARD.decode(&result_b64).unwrap();
+        let result_img = image::load_from_memory(&bytes).unwrap();
+
+        assert_eq!(result_img.width(), 200);
+        // 100 + 10 + 10 + 10 = 130
+        assert_eq!(result_img.height(), 130, "Four-frame slow stitch height mismatch");
+    }
 }

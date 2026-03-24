@@ -8,12 +8,6 @@ use tauri::{Emitter, Manager};
 /// commands can access the same flag.
 pub struct ScrollStop(pub Arc<AtomicBool>);
 
-/// Target point (logical screen coords) where scroll events are delivered.
-/// Set by `start_scroll_capture_cmd` to the center of the selected region.
-pub struct ScrollTarget(pub Mutex<Option<(f64, f64)>>);
-
-use std::sync::Mutex;
-
 // ── macOS CGEvent FFI ─────────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
@@ -100,6 +94,10 @@ fn post_scroll_down(_target: (f64, f64)) {}
 ///
 /// The loop exits when the stop flag is set. On exit it emits `scroll-capture-done`.
 /// Frame capture errors are forwarded to the frontend via `scroll-capture-error`.
+/// Hard cap on accumulated frames to prevent OOM.
+/// Each frame is a full-screen base64 PNG (~4-8 MB). 500 frames ≈ 2-4 GB.
+const MAX_FRAMES: usize = 500;
+
 pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_ms: u64, target: (f64, f64)) {
     use crate::capture_store::ScrollCaptureStore;
 
@@ -131,6 +129,11 @@ pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_m
                 match crate::capture_store::add_frame_to_store(&scroll_store) {
                     Ok(count) => {
                         let _ = app.emit("scroll-frame-added", count as u32);
+                        if count >= MAX_FRAMES {
+                            eprintln!("scroll capture: frame cap ({MAX_FRAMES}) reached, auto-stopping");
+                            let _ = app.emit("scroll-frame-cap-reached", MAX_FRAMES as u32);
+                            break;
+                        }
                     }
                     Err(e) => {
                         eprintln!("scroll capture error: {e}");
