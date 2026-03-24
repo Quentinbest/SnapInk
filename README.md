@@ -164,6 +164,8 @@ Svelte 5 runes (`$state`, `$derived`) in `stores.svelte.ts`:
 | | `scroll_capture_add_frame` | Manually add one frame (legacy) |
 | | `stitch_scroll_frames` | Stitch captured frames into one image |
 | | `scroll_capture_reset` | Clear all scroll state and close the pill |
+| OCR | `recognize_text` | Run Vision OCR on a base64 PNG; accepts optional language list |
+| | `get_supported_ocr_languages` | Query macOS Vision for supported OCR languages |
 | Export | `export_to_file` | Write base64 image to a file path |
 | | `expand_filename` | Expand a filename pattern with date/time tokens |
 | | `get_default_save_path` | Read the configured save path from settings |
