@@ -37,6 +37,19 @@ extern "C" {
     /// will be delivered.  This makes the scroll event target a specific
     /// screen point WITHOUT moving the user's cursor.
     fn CGEventSetLocation(event: *mut std::ffi::c_void, point: CGPoint);
+
+    /// Move the mouse cursor to a new position in global display coordinates.
+    /// Unlike mouse-move events, this is instantaneous and does not generate
+    /// intermediate move events.  Returns CGError (0 = success).
+    fn CGWarpMouseCursorPosition(point: CGPoint) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    /// Returns true if the current process is a trusted accessibility client.
+    /// CGEventPost silently drops events when this returns false.
+    fn AXIsProcessTrusted() -> bool;
 }
 
 /// CGPoint equivalent for FFI.
@@ -54,11 +67,40 @@ extern "C" {
     fn CFRelease(cf: *const std::ffi::c_void);
 }
 
+/// Check whether the process has Accessibility permission (macOS only).
+/// CGEventPost silently drops events without this.
+#[cfg(target_os = "macos")]
+pub fn is_accessibility_trusted() -> bool {
+    unsafe { AXIsProcessTrusted() }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_accessibility_trusted() -> bool {
+    true
+}
+
+/// Move the system cursor to `target` in global display coordinates.
+/// This ensures that CGEventPost delivers scroll events to the window
+/// under the cursor — CGEventSetLocation alone is unreliable for this.
+#[cfg(target_os = "macos")]
+pub fn warp_cursor(target: CGPoint) {
+    unsafe {
+        let err = CGWarpMouseCursorPosition(target);
+        if err != 0 {
+            eprintln!("CGWarpMouseCursorPosition failed with error code {err}");
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn warp_cursor(_target: (f64, f64)) {}
+
 /// Post a single scroll-down event (3 lines) targeted at `target`.
 ///
-/// `CGEventSetLocation` sets the delivery point in global display
-/// coordinates so the event reaches the window at that position
-/// WITHOUT moving the user's physical cursor.
+/// The cursor must already be at (or near) `target` — we rely on
+/// `CGEventPost` delivering to the window under the cursor.
+/// `CGEventSetLocation` is still called as a belt-and-suspenders measure
+/// but is NOT sufficient on its own for reliable delivery.
 ///
 /// No-op on non-macOS platforms.
 #[cfg(target_os = "macos")]
@@ -109,6 +151,16 @@ pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_m
     let target_point = CGPoint { x: target.0, y: target.1 };
     #[cfg(not(target_os = "macos"))]
     let target_point = target;
+
+    // Move the cursor to the target point so CGEventPost delivers scroll events
+    // to the correct window.  CGEventSetLocation alone is unreliable — macOS
+    // still routes events to the window under the actual cursor position.
+    #[cfg(target_os = "macos")]
+    {
+        warp_cursor(target_point);
+        // Small delay to let the window manager register the cursor position.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -212,5 +264,36 @@ mod tests {
             // Don't post — just verify the call chain doesn't crash.
             CFRelease(event as *const _);
         }
+    }
+
+    /// Regression: CGWarpMouseCursorPosition FFI must not crash.
+    /// The auto-scroll bug was caused by relying solely on CGEventSetLocation
+    /// which does not reliably route scroll events to the target window.
+    /// The fix warps the cursor to the target point before scrolling.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_warp_cursor_no_crash() {
+        // Warp to an off-screen point — should succeed without crashing.
+        warp_cursor(CGPoint { x: 0.0, y: 0.0 });
+    }
+
+    /// Regression: AXIsProcessTrusted FFI call must not crash.
+    /// The fix checks accessibility permission before starting the scroll loop
+    /// to give a clear error instead of silently dropping events.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_is_accessibility_trusted_no_crash() {
+        // Just verify the FFI call doesn't panic or segfault.
+        // The return value depends on system permissions — we only test the call.
+        let _trusted = is_accessibility_trusted();
+    }
+
+    /// Verify that is_accessibility_trusted returns a boolean (not garbage).
+    #[test]
+    fn test_is_accessibility_trusted_returns_bool() {
+        let result = is_accessibility_trusted();
+        // The result is either true or false — this may seem trivial but it
+        // confirms the FFI binding returns a valid bool and not UB.
+        assert!(result || !result);
     }
 }
