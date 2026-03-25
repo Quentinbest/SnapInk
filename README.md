@@ -159,7 +159,7 @@ Svelte 5 runes (`$state`, `$derived`) in `stores.svelte.ts`:
 | | `consume_capture_result` | Drain the pending capture (called by editor on mount) |
 | | `store_capture_result` | Store an already-captured image as the result |
 | Scroll | `start_scroll_capture_cmd` | Store region, close overlay, open pill |
-| | `start_auto_scroll_capture_cmd` | Start the auto-scroll + capture loop |
+| | `start_panoramic_capture_cmd` | Start the panoramic capture polling loop |
 | | `stop_scroll_capture_cmd` | Signal the loop to stop |
 | | `scroll_capture_add_frame` | Manually add one frame (legacy) |
 | | `stitch_scroll_frames` | Stitch captured frames into one image |

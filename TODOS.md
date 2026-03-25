@@ -37,7 +37,7 @@ Moved `scroll_target` field into `ScrollCaptureStore`, removed standalone `Scrol
 **Why:** The Retina coordinate conversion was a source of confusion during the panoramic capture design review. Without documentation, the next developer touching `CaptureRegion` may pass logical coordinates and get 2x wrong capture dimensions on Retina displays.
 **Pros:** One-line comment prevents a class of Retina display bugs.
 **Cons:** None.
-**Context:** `CaptureRegion` is in `app/src-tauri/src/types.rs`. Physical pixel coordinates confirmed by `capture/+page.svelte:170` which multiplies by `scaleFactor`. The `capture_region_direct()` function divides by scale to convert back to points for `CGDisplayCreateImageForRect`.
+**Context:** `CaptureRegion` is in `app/src-tauri/src/types.rs`. Physical pixel coordinates confirmed by `capture/+page.svelte:170` which multiplies by `scaleFactor`. The `capture_region_direct()` function divides by scale to convert back to points for `CGWindowListCreateImage`.
 **Depends on:** Nothing blocking. Independent.
 
 ## Panoramic loop catch_unwind
