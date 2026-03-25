@@ -2,17 +2,22 @@ use base64::{engine::general_purpose, Engine as _};
 
 /// Returns true if running macOS 13 (Ventura) or later.
 /// Used to guard APIs introduced in macOS 13 (e.g. `setAutomaticallyDetectsLanguage`).
+/// Cached via OnceLock — `sw_vers` is only spawned once per process lifetime.
 #[cfg(target_os = "macos")]
 fn is_macos_13_or_later() -> bool {
-    use std::process::Command;
-    Command::new("sw_vers")
-        .arg("-productVersion")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|v| v.trim().split('.').next().map(String::from))
-        .and_then(|major| major.parse::<u32>().ok())
-        .map_or(false, |major| major >= 13)
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        use std::process::Command;
+        Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|v| v.trim().split('.').next().map(String::from))
+            .and_then(|major| major.parse::<u32>().ok())
+            .map_or(false, |major| major >= 13)
+    })
 }
 
 // ─── macOS Vision OCR ──────────────────────────────────────────────────────
