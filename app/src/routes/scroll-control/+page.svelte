@@ -8,16 +8,10 @@
   let status = $state<'scrolling' | 'stopping' | 'stitching' | 'error'>('scrolling');
   let errorMsg = $state('');
   let cancelled = false;
-  let loopStarted = false;
 
   let unlistenFrameAdded: (() => void) | null = null;
   let unlistenDone: (() => void) | null = null;
   let unlistenError: (() => void) | null = null;
-  let unlistenLoopStarted: (() => void) | null = null;
-
-  // If the loop hasn't emitted scroll-loop-started within 3 seconds,
-  // something went wrong starting it.
-  let loopStartTimeout: ReturnType<typeof setTimeout> | null = null;
 
   onMount(async () => {
     // Ensure the pill has keyboard focus so Space / Escape are delivered here.
@@ -39,34 +33,19 @@
       }
     });
 
-    // Confirm the loop started. If we don't hear back within 3 s, show an error.
-    unlistenLoopStarted = await listen<void>('scroll-loop-started', () => {
-      loopStarted = true;
-      if (loopStartTimeout) clearTimeout(loopStartTimeout);
-    });
-
     try {
-      await invoke('start_auto_scroll_capture_cmd');
+      await invoke('start_panoramic_capture_cmd');
     } catch (e) {
       status = 'error';
       errorMsg = String(e);
       return;
     }
-
-    loopStartTimeout = setTimeout(() => {
-      if (!loopStarted && status === 'scrolling') {
-        status = 'error';
-        errorMsg = 'Capture loop failed to start.';
-      }
-    }, 3000);
   });
 
   onDestroy(() => {
     unlistenFrameAdded?.();
     unlistenDone?.();
     unlistenError?.();
-    unlistenLoopStarted?.();
-    if (loopStartTimeout) clearTimeout(loopStartTimeout);
   });
 
   async function stop() {
@@ -116,7 +95,7 @@
   {#if status === 'scrolling'}
     <span class="icon">↕</span>
     <span class="count">{frameCount} {frameCount === 1 ? 'frame' : 'frames'}</span>
-    <span class="hint">· Space to stop</span>
+    <span class="hint">· Scroll now · Space to stop</span>
     <div class="divider"></div>
     <button class="btn stop" onclick={stop}>Stop</button>
     <button class="btn cancel" onclick={cancel}>✕</button>

@@ -110,10 +110,15 @@ pub fn stitch_frames(frames: Vec<DynamicImage>) -> Result<String, String> {
         let src = frame.to_rgba8();
         let frame_w = src.width().min(width);
 
+        // Row-wise copy: RgbaImage stores rows contiguously (RGBA = 4 bytes/pixel).
+        // copy_from_slice is ~10x faster than per-pixel put_pixel (eliminates
+        // bounds checks and function call overhead per pixel).
+        let bytes_per_row = (frame_w * 4) as usize;
         for y in skip..src.height() {
-            for x in 0..frame_w {
-                result.put_pixel(x, y_out, *src.get_pixel(x, y));
-            }
+            let src_offset = (y * src.width() * 4) as usize;
+            let dst_offset = (y_out * width * 4) as usize;
+            result.as_mut()[dst_offset..dst_offset + bytes_per_row]
+                .copy_from_slice(&src.as_raw()[src_offset..src_offset + bytes_per_row]);
             y_out += 1;
         }
     }
@@ -121,12 +126,19 @@ pub fn stitch_frames(frames: Vec<DynamicImage>) -> Result<String, String> {
     image_to_base64_png(&DynamicImage::ImageRgba8(result))
 }
 
-/// Quick check: is this frame identical (or nearly identical) to the previous one?
-/// Compares the first `prefix_len` bytes of the base64 string — cheap and effective
-/// because any scroll movement changes the PNG header's IDAT chunk.
-pub fn is_duplicate(prev_b64: &str, next_b64: &str) -> bool {
-    let prefix_len = 1200.min(prev_b64.len()).min(next_b64.len());
-    prev_b64[..prefix_len] == next_b64[..prefix_len]
+/// Stitch frames from raw PNG byte vectors (no base64 involved).
+/// Thin wrapper: decodes PNG bytes → DynamicImage, then delegates to `stitch_frames()`.
+pub fn stitch_frames_from_bytes(frames: Vec<Vec<u8>>) -> Result<String, String> {
+    let images: Result<Vec<DynamicImage>, String> = frames
+        .iter()
+        .enumerate()
+        .map(|(i, bytes)| {
+            image::load_from_memory(bytes)
+                .map_err(|e| format!("Failed to decode frame {i}: {e}"))
+        })
+        .collect();
+
+    stitch_frames(images?)
 }
 
 #[cfg(test)]
@@ -239,30 +251,65 @@ mod tests {
     }
 
     #[test]
-    fn test_is_duplicate_identical() {
-        let s = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-        assert!(is_duplicate(s, s));
+    fn test_stitch_frames_from_bytes_two_frames() {
+        let full = gradient(200, 400, 0);
+        let top = full.crop_imm(0, 0, 200, 220);
+        let bottom = full.crop_imm(0, 180, 200, 220);
+
+        // Encode to PNG bytes
+        fn to_png_bytes(img: &DynamicImage) -> Vec<u8> {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+            buf.into_inner()
+        }
+
+        let frames = vec![to_png_bytes(&top), to_png_bytes(&bottom)];
+        let result_b64 = stitch_frames_from_bytes(frames).unwrap();
+        let bytes = general_purpose::STANDARD.decode(&result_b64).unwrap();
+        let result_img = image::load_from_memory(&bytes).unwrap();
+
+        assert_eq!(result_img.width(), 200);
+        assert_eq!(result_img.height(), 400);
     }
 
     #[test]
-    fn test_is_duplicate_different() {
-        let a = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-        let b = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVQI12P4z8BQDwAEgAF/QualIQAAAABJRU5ErkJggg==";
-        assert!(!is_duplicate(a, b));
+    fn test_stitch_frames_from_bytes_empty() {
+        assert!(stitch_frames_from_bytes(vec![]).is_err());
     }
 
     #[test]
-    fn test_is_duplicate_short_strings() {
-        // Strings shorter than 1200 bytes: prefix_len should be clamped to the shorter length.
-        let short = "ABCDEF";
-        assert!(is_duplicate(short, short));
-        assert!(!is_duplicate("ABCDEF", "ABCDEG"));
+    fn test_stitch_frames_from_bytes_invalid_png() {
+        let bad_data = vec![vec![0u8, 1, 2, 3]]; // not valid PNG
+        assert!(stitch_frames_from_bytes(bad_data).is_err());
     }
 
+    /// CRITICAL REGRESSION TEST: Verify row-wise copy_from_slice produces
+    /// identical results. If the byte offsets are wrong, stitching silently
+    /// produces corrupted output.
     #[test]
-    fn test_is_duplicate_empty_strings() {
-        // Two empty strings: prefix of length 0 means they match.
-        assert!(is_duplicate("", ""));
+    fn test_row_copy_produces_correct_output() {
+        // Stitch two overlapping frames and verify specific pixel values
+        // match the original gradient.
+        let full = gradient(200, 400, 0);
+        let top = full.crop_imm(0, 0, 200, 220);
+        let bottom = full.crop_imm(0, 180, 200, 220);
+
+        let result_b64 = stitch_frames(vec![top, bottom]).unwrap();
+        let bytes = general_purpose::STANDARD.decode(&result_b64).unwrap();
+        let result_img = image::load_from_memory(&bytes).unwrap().to_rgba8();
+
+        // Check a few pixels from the original gradient match
+        let full_rgba = full.to_rgba8();
+        for &y in &[0, 100, 200, 300, 399] {
+            for &x in &[0, 50, 100, 150, 199] {
+                let expected = full_rgba.get_pixel(x, y);
+                let actual = result_img.get_pixel(x, y);
+                assert_eq!(
+                    expected, actual,
+                    "Pixel mismatch at ({x}, {y}): expected {expected:?}, got {actual:?}"
+                );
+            }
+        }
     }
 
     #[test]
