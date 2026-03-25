@@ -113,10 +113,10 @@ pub fn stitch_frames(frames: Vec<DynamicImage>) -> Result<String, String> {
         // Row-wise copy: RgbaImage stores rows contiguously (RGBA = 4 bytes/pixel).
         // copy_from_slice is ~10x faster than per-pixel put_pixel (eliminates
         // bounds checks and function call overhead per pixel).
-        let bytes_per_row = (frame_w * 4) as usize;
+        let bytes_per_row = (frame_w as usize) * 4;
         for y in skip..src.height() {
-            let src_offset = (y * src.width() * 4) as usize;
-            let dst_offset = (y_out * width * 4) as usize;
+            let src_offset = (y as usize) * (src.width() as usize) * 4;
+            let dst_offset = (y_out as usize) * (width as usize) * 4;
             result.as_mut()[dst_offset..dst_offset + bytes_per_row]
                 .copy_from_slice(&src.as_raw()[src_offset..src_offset + bytes_per_row]);
             y_out += 1;

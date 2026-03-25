@@ -156,7 +156,7 @@ pub fn scroll_capture_add_frame(
 pub fn stitch_scroll_frames(
     scroll_store: tauri::State<'_, ScrollCaptureStore>,
 ) -> Result<String, String> {
-    let frames_bytes = scroll_store.frames.lock().unwrap().clone();
+    let frames_bytes = std::mem::take(&mut *scroll_store.frames.lock().unwrap());
     if frames_bytes.is_empty() {
         return Err("No frames captured".to_string());
     }
