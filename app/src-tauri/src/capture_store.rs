@@ -22,12 +22,11 @@ impl CaptureStore {
 }
 
 /// Accumulates frames captured during a scroll-capture session.
-/// Also stores the scroll target (logical center of capture region)
-/// so CGEvent scroll events are delivered to the correct screen point.
+/// Frames are stored as raw PNG bytes (`Vec<u8>`) to avoid the base64
+/// encode/decode cycle that the old auto-scroll pipeline used.
 pub struct ScrollCaptureStore {
     pub region: Mutex<Option<CaptureRegion>>,
-    pub frames: Mutex<Vec<String>>,
-    pub scroll_target: Mutex<Option<(f64, f64)>>,
+    pub frames: Mutex<Vec<Vec<u8>>>,
 }
 
 impl ScrollCaptureStore {
@@ -35,7 +34,6 @@ impl ScrollCaptureStore {
         Self {
             region: Mutex::new(None),
             frames: Mutex::new(Vec::new()),
-            scroll_target: Mutex::new(None),
         }
     }
 }
@@ -107,10 +105,22 @@ pub fn store_capture_result(store: tauri::State<'_, CaptureStore>, data: String)
 
 // ── ScrollCaptureStore commands ───────────────────────────────────────────────
 
+/// Hash PNG bytes for change detection. Uses SipHash (std DefaultHasher) —
+/// fast enough for ~200KB-1MB PNG blobs at 10 fps.
+pub(crate) fn frame_hash(png_bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    png_bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Capture the stored scroll region and append one frame (shared logic).
-/// Skips the frame if identical to the previous one (deduplication).
+/// Skips the frame if identical to the previous one (hash-based deduplication).
 /// Returns the new total frame count.
-pub(crate) fn add_frame_to_store(scroll_store: &ScrollCaptureStore) -> Result<usize, String> {
+pub(crate) fn add_frame_to_store(
+    scroll_store: &ScrollCaptureStore,
+    last_hash: &mut u64,
+) -> Result<usize, String> {
     let region = scroll_store
         .region
         .lock()
@@ -118,17 +128,16 @@ pub(crate) fn add_frame_to_store(scroll_store: &ScrollCaptureStore) -> Result<us
         .clone()
         .ok_or("No scroll capture region set")?;
 
-    let frame_data = crate::capture::capture_region_sync(&region)?;
+    let frame_data = crate::capture::capture_region_direct(&region)?;
+
+    let hash = frame_hash(&frame_data);
+    if hash == *last_hash {
+        // Frame unchanged — skip storage
+        return Ok(scroll_store.frames.lock().unwrap().len());
+    }
+    *last_hash = hash;
 
     let mut frames = scroll_store.frames.lock().unwrap();
-
-    // Skip duplicate frames (no scroll happened yet).
-    if let Some(last) = frames.last() {
-        if crate::stitch::is_duplicate(last, &frame_data) {
-            return Ok(frames.len());
-        }
-    }
-
     frames.push(frame_data);
     Ok(frames.len())
 }
@@ -138,7 +147,8 @@ pub(crate) fn add_frame_to_store(scroll_store: &ScrollCaptureStore) -> Result<us
 pub fn scroll_capture_add_frame(
     scroll_store: tauri::State<'_, ScrollCaptureStore>,
 ) -> Result<usize, String> {
-    add_frame_to_store(&scroll_store)
+    let mut last_hash = 0u64;
+    add_frame_to_store(&scroll_store, &mut last_hash)
 }
 
 /// Stitch all captured frames and return the result as a base64-encoded PNG.
@@ -146,24 +156,12 @@ pub fn scroll_capture_add_frame(
 pub fn stitch_scroll_frames(
     scroll_store: tauri::State<'_, ScrollCaptureStore>,
 ) -> Result<String, String> {
-    use base64::{engine::general_purpose, Engine as _};
-
-    let frames_b64 = scroll_store.frames.lock().unwrap().clone();
-    if frames_b64.is_empty() {
+    let frames_bytes = std::mem::take(&mut *scroll_store.frames.lock().unwrap());
+    if frames_bytes.is_empty() {
         return Err("No frames captured".to_string());
     }
 
-    let frames: Result<Vec<image::DynamicImage>, String> = frames_b64
-        .iter()
-        .map(|b64| {
-            let bytes = general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|e| e.to_string())?;
-            image::load_from_memory(&bytes).map_err(|e| e.to_string())
-        })
-        .collect();
-
-    crate::stitch::stitch_frames(frames?)
+    crate::stitch::stitch_frames_from_bytes(frames_bytes)
 }
 
 /// Clear all scroll capture state (frames + region).
@@ -175,7 +173,6 @@ pub fn scroll_capture_reset(
 ) {
     scroll_store.frames.lock().unwrap().clear();
     *scroll_store.region.lock().unwrap() = None;
-    *scroll_store.scroll_target.lock().unwrap() = None;
 
     if let Some(win) = app.get_webview_window("scroll-control") {
         let _ = win.close();
@@ -287,7 +284,6 @@ mod tests {
         let store = ScrollCaptureStore::new();
         assert!(store.region.lock().unwrap().is_none());
         assert!(store.frames.lock().unwrap().is_empty());
-        assert!(store.scroll_target.lock().unwrap().is_none());
     }
 
     #[test]
@@ -296,16 +292,26 @@ mod tests {
         *store.region.lock().unwrap() = Some(crate::types::CaptureRegion {
             x: 10, y: 20, width: 100, height: 200,
         });
-        store.frames.lock().unwrap().push("frame1".to_string());
-        *store.scroll_target.lock().unwrap() = Some((500.0, 400.0));
+        store.frames.lock().unwrap().push(vec![1, 2, 3]);
 
         // Simulate reset (without the Tauri window close).
         store.frames.lock().unwrap().clear();
         *store.region.lock().unwrap() = None;
-        *store.scroll_target.lock().unwrap() = None;
 
         assert!(store.region.lock().unwrap().is_none());
         assert!(store.frames.lock().unwrap().is_empty());
-        assert!(store.scroll_target.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_frame_hash_deterministic() {
+        let data = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(super::frame_hash(&data), super::frame_hash(&data));
+    }
+
+    #[test]
+    fn test_frame_hash_different_content() {
+        let a = vec![1u8, 2, 3, 4];
+        let b = vec![5u8, 6, 7, 8];
+        assert_ne!(super::frame_hash(&a), super::frame_hash(&b));
     }
 }

@@ -29,3 +29,5 @@ dirs = "6.0.0"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSArray", "NSDictionary", "NSString"] }
 objc2-vision = { version = "0.3", features = ["VNRequest", "VNRequestHandler", "VNRecognizeTextRequest", "VNObservation", "VNRequestRevisionProviding"] }
+objc2-core-foundation = "0.3"
+objc2-core-graphics = { version = "0.3", features = ["CGImage", "CGDataProvider", "CGDirectDisplay", "CGDisplayConfiguration", "CGWindow"] }

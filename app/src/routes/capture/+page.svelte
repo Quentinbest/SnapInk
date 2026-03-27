@@ -305,7 +305,7 @@
         <!-- Scrolling mode: only show Start and Cancel -->
         <div class="action-bar" style={actionBarStyle(selection)}>
           <button class="action-btn scroll-start" onclick={startScrollCapture}>
-            ↕ Start Scrolling Capture
+            ↕ Scroll Capture
           </button>
           <div class="action-divider"></div>
           <button class="action-btn danger" onclick={cancel}>✕</button>

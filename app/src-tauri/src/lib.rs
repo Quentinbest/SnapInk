@@ -173,7 +173,7 @@ fn open_settings_cmd(app: tauri::AppHandle) {
 fn start_scroll_capture_cmd(
     app: tauri::AppHandle,
     scroll_store: tauri::State<'_, ScrollCaptureStore>,
-    // Physical pixel coords for xcap screen capture.
+    // Physical pixel coords for region capture.
     x: i32,
     y: i32,
     width: u32,
@@ -188,14 +188,6 @@ fn start_scroll_capture_cmd(
     *scroll_store.region.lock().unwrap() = Some(types::CaptureRegion { x, y, width, height });
     scroll_store.frames.lock().unwrap().clear();
 
-    // Store the logical center of the region so CGEvent scroll events
-    // are targeted at the correct window (not wherever the cursor is).
-    {
-        let center_x = logical_x + logical_width / 2.0;
-        let center_y = logical_y + logical_height / 2.0;
-        *scroll_store.scroll_target.lock().unwrap() = Some((center_x, center_y));
-    }
-
     // Close the full-screen capture overlay.
     if let Some(win) = app.get_webview_window("capture") {
         let _ = win.close();
@@ -209,48 +201,22 @@ fn start_scroll_capture_cmd(
     Ok(())
 }
 
-/// Start the auto-scroll capture loop.
-/// Posts CGEvent scroll events at a fixed interval, captures frames, and
-/// emits `scroll-frame-added` / `scroll-capture-done` to the frontend.
-/// Space key is registered as a global shortcut to stop the loop.
+/// Start the panoramic capture loop.
+/// The user scrolls naturally — the loop polls for screen changes at ~100ms.
+/// No scroll injection, no cursor warping, no Accessibility permission needed.
 #[tauri::command]
-fn start_auto_scroll_capture_cmd(
+fn start_panoramic_capture_cmd(
     app: tauri::AppHandle,
     scroll_stop: tauri::State<'_, scroll::ScrollStop>,
-    scroll_store: tauri::State<'_, ScrollCaptureStore>,
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
-    // Read the scroll target (logical center of the capture region).
-    let target = scroll_store.scroll_target.lock().unwrap()
-        .ok_or("No scroll target set — call start_scroll_capture_cmd first")?;
-
-    // Unregister any stale Space shortcut left over from a previous session
-    // (e.g., if the session crashed before its cleanup code ran).
-    let _ = app.global_shortcut().unregister("Space");
 
     // Reset stop flag for this new capture.
     scroll_stop.0.store(false, Ordering::Relaxed);
     let stop = scroll_stop.0.clone();
 
-    // Best-effort: register Space as a global shortcut so it works even when
-    // the pill window loses focus. Failure is non-fatal — the DOM keyboard
-    // handler in the frontend covers the common case (pill window is focused).
-    let stop_for_shortcut = stop.clone();
-    if let Err(e) = app.global_shortcut().on_shortcut(
-        "Space",
-        move |_app, _shortcut, _event| {
-            stop_for_shortcut.store(true, Ordering::Relaxed);
-        },
-    ) {
-        eprintln!("Space global shortcut unavailable (will use DOM fallback): {e}");
-    }
-
     std::thread::spawn(move || {
-        scroll::run_capture_loop(app.clone(), stop, 300, target);
-        // Unregister Space after the loop exits.
-        let _ = app.global_shortcut().unregister("Space");
+        scroll::run_panoramic_loop(app, stop, 100);
     });
 
     Ok(())
@@ -404,13 +370,14 @@ pub fn run() {
             open_editor_cmd,
             open_settings_cmd,
             start_scroll_capture_cmd,
-            start_auto_scroll_capture_cmd,
+            start_panoramic_capture_cmd,
             stop_scroll_capture_cmd,
             pin::pin_image,
             pin::get_pin_image,
             pin::remove_pin_image,
             clipboard::read_clipboard_image,
             ocr::recognize_text,
+            ocr::get_supported_ocr_languages,
         ])
         // Keep the app alive as a menu bar agent even when all windows are closed.
         // Without this handler, Tauri exits as soon as the last window is destroyed.

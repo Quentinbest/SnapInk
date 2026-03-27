@@ -64,8 +64,8 @@ The app runs as a single persistent process with multiple windows opened on dema
 | Group | Commands |
 |---|---|
 | Capture | `get_monitors`, `get_windows`, `capture_fullscreen`, `capture_region`, `capture_window_by_id`, `get_capture_background`, `crop_and_store`, `store_capture_result`, `consume_capture_result` |
-| Scroll | `start_scroll_capture_cmd`, `start_auto_scroll_capture_cmd`, `stop_scroll_capture_cmd`, `scroll_capture_add_frame`, `stitch_scroll_frames`, `scroll_capture_reset` |
-| OCR | `recognize_text` |
+| Scroll | `start_scroll_capture_cmd`, `start_panoramic_capture_cmd`, `stop_scroll_capture_cmd`, `scroll_capture_add_frame`, `stitch_scroll_frames`, `scroll_capture_reset` |
+| OCR | `recognize_text`, `get_supported_ocr_languages` |
 | Export | `export_to_file`, `expand_filename`, `get_default_save_path` |
 | Settings | `get_settings`, `save_settings` |
 | Window | `open_capture_cmd`, `open_editor_cmd`, `open_settings_cmd` |
@@ -93,9 +93,9 @@ Uses Svelte 5 runes (`$state`). Key fields: `annotations[]`, `activeTool`, `acti
 | `lib.rs` | App orchestrator: tray menu, global shortcuts, all IPC command registration |
 | `capture.rs` | `xcap` wrapper → base64 PNG; shared `crop_and_encode()` helper |
 | `capture_store.rs` | `CaptureStore` and `ScrollCaptureStore` — bridges capture/scroll to editor |
-| `scroll.rs` | Auto-scroll loop: CGEvent injection, frame capture, stop flag, 500-frame cap |
+| `scroll.rs` | Panoramic capture loop: polls screen changes, hash-based dedup, stop flag, 500-frame cap |
 | `stitch.rs` | Overlap detection and vertical frame stitching |
-| `ocr.rs` | macOS Vision OCR via `objc2-vision`; `recognize_text` IPC command |
+| `ocr.rs` | macOS Vision OCR via `objc2-vision`; `recognize_text` and `get_supported_ocr_languages` IPC commands; auto-detect + explicit language support |
 | `export.rs` | base64 → PNG/JPEG file write; `{YYYY}/{MM}/{DD}/{HH}/{mm}/{ss}` filename patterns |
 | `settings.rs` | JSON I/O to `$CONFIG_DIR/SnapInk/settings.json` |
 | `pin.rs` | `PinStore(HashMap<id, base64>)` for floating windows |

@@ -1,137 +1,55 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tauri::{Emitter, Manager};
 
-/// Shared stop flag for the active auto-scroll capture loop.
+/// Shared stop flag for the active panoramic capture loop.
 /// Stored as Tauri managed state so both the background thread and IPC
 /// commands can access the same flag.
 pub struct ScrollStop(pub Arc<AtomicBool>);
 
-// ── macOS CGEvent FFI ─────────────────────────────────────────────────────────
+// ── Panoramic capture loop ───────────────────────────────────────────────────
 
-#[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    /// Create a scroll wheel event.
-    ///
-    /// CGEventCreateScrollWheelEvent2 is **non-variadic** (unlike the original
-    /// CGEventCreateScrollWheelEvent) and requires all 6 parameters:
-    ///   source, units, wheelCount, wheel1, wheel2, wheel3
-    /// Omitting wheel2/wheel3 causes undefined behaviour — the function reads
-    /// garbage from whatever happens to be in the argument registers.
-    fn CGEventCreateScrollWheelEvent2(
-        source: *const std::ffi::c_void, // CGEventSourceRef (null = hardware)
-        units: u32,                      // kCGScrollEventUnitLine = 1
-        wheel_count: u32,                // 1 = vertical only
-        wheel1: i32,                     // negative = scroll down (content up)
-        wheel2: i32,                     // horizontal — 0 for none
-        wheel3: i32,                     // unused axis — 0
-    ) -> *mut std::ffi::c_void;          // CGEventRef
-
-    /// Post an event into the event stream.
-    /// kCGHIDEventTap = 0: hardware-level tap, delivers to window under cursor.
-    fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
-
-    /// Set the location (in global display coordinates) where the event
-    /// will be delivered.  This makes the scroll event target a specific
-    /// screen point WITHOUT moving the user's cursor.
-    fn CGEventSetLocation(event: *mut std::ffi::c_void, point: CGPoint);
-}
-
-/// CGPoint equivalent for FFI.
-#[cfg(target_os = "macos")]
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct CGPoint {
-    pub x: f64,
-    pub y: f64,
-}
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    fn CFRelease(cf: *const std::ffi::c_void);
-}
-
-/// Post a single scroll-down event (3 lines) targeted at `target`.
-///
-/// `CGEventSetLocation` sets the delivery point in global display
-/// coordinates so the event reaches the window at that position
-/// WITHOUT moving the user's physical cursor.
-///
-/// No-op on non-macOS platforms.
-#[cfg(target_os = "macos")]
-fn post_scroll_down(target: CGPoint) {
-    unsafe {
-        let event = CGEventCreateScrollWheelEvent2(
-            std::ptr::null(),
-            1,     // kCGScrollEventUnitLine
-            1,     // wheelCount (vertical only)
-            -3i32, // negative = scroll down (reveal content below)
-            0,     // wheel2 (horizontal) — no horizontal scroll
-            0,     // wheel3 — unused axis
-        );
-        if !event.is_null() {
-            CGEventSetLocation(event, target);
-            CGEventPost(0, event); // kCGHIDEventTap = 0
-            CFRelease(event as *const _);
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn post_scroll_down(_target: (f64, f64)) {}
-
-// ── Capture loop ──────────────────────────────────────────────────────────────
-
-/// Run the auto-scroll capture loop in the calling thread (blocks until stopped).
-///
-/// Each iteration:
-///   1. Posts a scroll-down event (3 lines) via CGEvent.
-///   2. Sleeps `interval_ms` to let the scroll animation settle.
-///   3. Captures a frame and emits `scroll-frame-added` with the new count.
-///
-/// The loop exits when the stop flag is set. On exit it emits `scroll-capture-done`.
-/// Frame capture errors are forwarded to the frontend via `scroll-capture-error`.
 /// Hard cap on accumulated frames to prevent OOM.
-/// Each frame is a full-screen base64 PNG (~4-8 MB). 500 frames ≈ 2-4 GB.
+/// Each frame is a PNG-encoded region (~200KB-1MB). 500 frames ≈ 100-500 MB.
 const MAX_FRAMES: usize = 500;
 
-pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_ms: u64, target: (f64, f64)) {
+/// Run the panoramic capture loop in the calling thread (blocks until stopped).
+///
+/// The user scrolls naturally — this loop just polls for screen changes:
+///   1. Captures the stored region via `capture_region_direct()`.
+///   2. Hashes the PNG bytes and skips storage if unchanged (deduplication).
+///   3. Sleeps for the remainder of the interval (elapsed-time-aware).
+///
+/// No scroll injection, no cursor warping, no Accessibility permission needed.
+/// The loop exits when the stop flag is set. On exit it emits `scroll-capture-done`.
+pub fn run_panoramic_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_ms: u64) {
     use crate::capture_store::ScrollCaptureStore;
 
-    // Confirm the loop is alive so the frontend can detect if the command succeeded
-    // but the loop never started (e.g., immediate panic).
     let _ = app.emit("scroll-loop-started", ());
 
-    #[cfg(target_os = "macos")]
-    let target_point = CGPoint { x: target.0, y: target.1 };
-    #[cfg(not(target_os = "macos"))]
-    let target_point = target;
+    let interval = Duration::from_millis(interval_ms);
+    let mut last_hash: u64 = 0;
 
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
 
-        post_scroll_down(target_point);
-
-        // Wait for the scroll animation to settle before capturing.
-        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
-
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
+        let start = Instant::now();
 
         match app.try_state::<ScrollCaptureStore>() {
             Some(scroll_store) => {
-                match crate::capture_store::add_frame_to_store(&scroll_store) {
+                match crate::capture_store::add_frame_to_store(&scroll_store, &mut last_hash) {
                     Ok(count) => {
                         let _ = app.emit("scroll-frame-added", count as u32);
                         if count >= MAX_FRAMES {
-                            eprintln!("scroll capture: frame cap ({MAX_FRAMES}) reached, auto-stopping");
-                            let _ = app.emit("scroll-frame-cap-reached", MAX_FRAMES as u32);
+                            eprintln!(
+                                "scroll capture: frame cap ({MAX_FRAMES}) reached, auto-stopping"
+                            );
+                            let _ =
+                                app.emit("scroll-frame-cap-reached", MAX_FRAMES as u32);
                             break;
                         }
                     }
@@ -149,6 +67,16 @@ pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_m
                 break;
             }
         }
+
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Elapsed-time-aware scheduling: subtract capture duration from sleep.
+        // Minimum 10ms sleep to yield to other threads.
+        let elapsed = start.elapsed();
+        let sleep_time = interval.saturating_sub(elapsed).max(Duration::from_millis(10));
+        std::thread::sleep(sleep_time);
     }
 
     let _ = app.emit("scroll-capture-done", ());
@@ -156,61 +84,20 @@ pub fn run_capture_loop(app: tauri::AppHandle, stop: Arc<AtomicBool>, interval_m
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "macos")]
     use super::*;
 
-    /// Verify that the CGEventCreateScrollWheelEvent2 FFI declaration matches
-    /// the real C signature (6 arguments: source, units, wheelCount, wheel1,
-    /// wheel2, wheel3).  A previous bug omitted wheel2/wheel3 which caused
-    /// undefined behaviour and a NULL return on Apple Silicon.
     #[test]
-    #[cfg(target_os = "macos")]
-    fn test_post_scroll_down_creates_valid_event() {
-        // Calling post_scroll_down should not panic or crash.
-        // We can't easily observe the scroll effect in a headless test, but we
-        // CAN verify the event is created (non-NULL) by calling the FFI
-        // directly with the corrected signature.
-        unsafe {
-            let event = CGEventCreateScrollWheelEvent2(
-                std::ptr::null(),
-                1,     // kCGScrollEventUnitLine
-                1,     // wheelCount
-                -1i32, // wheel1
-                0,     // wheel2
-                0,     // wheel3
-            );
-            assert!(
-                !event.is_null(),
-                "CGEventCreateScrollWheelEvent2 returned NULL — FFI signature mismatch?"
-            );
-            // Don't post the event in tests; just verify creation succeeded.
-            CFRelease(event as *const _);
-        }
+    fn test_scroll_stop_flag() {
+        let stop = Arc::new(AtomicBool::new(false));
+        assert!(!stop.load(Ordering::Relaxed));
+        stop.store(true, Ordering::Relaxed);
+        assert!(stop.load(Ordering::Relaxed));
     }
 
-    /// Smoke-test: post_scroll_down() must not panic or segfault.
     #[test]
-    #[cfg(target_os = "macos")]
-    fn test_post_scroll_down_no_crash() {
-        // Target a point that's off-screen so the event has no visible effect.
-        post_scroll_down(CGPoint { x: 0.0, y: 0.0 });
-    }
-
-    /// Verify that CGEventSetLocation is accepted by the event.
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn test_post_scroll_down_with_target_location() {
-        // Simulate targeting the center of a capture region at (500, 400).
-        let target = CGPoint { x: 500.0, y: 400.0 };
-        unsafe {
-            let event = CGEventCreateScrollWheelEvent2(
-                std::ptr::null(),
-                1, 1, -1i32, 0, 0,
-            );
-            assert!(!event.is_null());
-            CGEventSetLocation(event, target);
-            // Don't post — just verify the call chain doesn't crash.
-            CFRelease(event as *const _);
-        }
+    fn test_max_frames_constant() {
+        // Verify the frame cap is reasonable (not accidentally set to 0 or u64::MAX).
+        assert!(MAX_FRAMES > 0);
+        assert!(MAX_FRAMES <= 1000);
     }
 }
